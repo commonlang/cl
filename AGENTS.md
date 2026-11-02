@@ -14,9 +14,13 @@ person labelled `agent-ok`.
 
 ## Layout
 
-- `src/cl.c` is the whole interpreter, dev server and CGI mode, in one C11 file.
-  The vocabulary is the `DICTIONARY` table near the top; `SYNONYMS` maps words
-  from other languages to the Common word to use instead.
+- `src/cl.c` is the interpreter, dev server and CGI mode: the language itself,
+  in one C11 file. The vocabulary is the `DICTIONARY` table near the top;
+  `SYNONYMS` maps words from other languages to the Common word to use instead.
+- `src/cl_module.h` is the module interface. `src/mod_sqlite.c` and
+  `src/mod_postgres.c` are the two modules, each wrapping one library behind
+  it; the core never includes a library. `docs/modules.md` says how to write
+  one. Words, parsing and the safety rules stay in the core.
 - `docs/dictionary.md` is the reference for people. `docs/deploy.md` covers hosting.
 - `tests/run.sh` is the test suite. `tests/features.html` and
   `tests/features.expected` pin the output of every feature and error.
@@ -57,7 +61,7 @@ and go over the list whenever you finish a piece of work.
 - **Test on Linux too.** macOS hides Linux-only failures: a newer gcc refuses
   what clang allows, Linux caps one command-line argument at 128 KB, Debian does
   not ship the `sqlite3` command with the library, and gcc's sanitizer uses far
-  more stack per call. Any change to `src/cl.c`, `tests/` or the `Makefile` is
+  more stack per call. Any change to `src/`, `tests/` or the `Makefile` is
   also built and tested in a Linux container with a current gcc (14 or newer),
   including `make sanitize` with `ASAN_OPTIONS=detect_leaks=1`. CONTRIBUTING.md
   ("Checking for leaks") shows the Docker command; `debian:trixie-slim` with

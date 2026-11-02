@@ -138,9 +138,14 @@ w64devkit shell: `sh tests/run.sh`.
 Any C11 compiler works:
 
 ```sh
-cc -O2 -o cl src/cl.c               # macOS, Linux, BSD
-gcc -O2 -o common.exe src/cl.c -lws2_32   # Windows, MinGW
+cc -O2 -o cl src/cl.c                                          # macOS, Linux, BSD: no database words
+cc -O2 -DCL_SQLITE -o cl src/cl.c src/mod_sqlite.c -lsqlite3    # the same, with SQLite
+gcc -O2 -o common.exe src/cl.c -lws2_32                        # Windows, MinGW
 ```
+
+Each database is a module in `src/`: `mod_sqlite.c` needs `-DCL_SQLITE` and
+`-lsqlite3`, `mod_postgres.c` needs `-DCL_POSTGRES` and `-lpq`. `make` works
+this out from what is installed.
 
 ---
 

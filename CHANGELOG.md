@@ -4,6 +4,18 @@ Changes go under **Unreleased** as they are made. `make release VERSION=X.Y.Z` t
 
 ## Unreleased
 
+- The SQLite and Postgres drivers are now modules, `src/mod_sqlite.c` and
+  `src/mod_postgres.c`, behind the small interface in `src/cl_module.h`; the
+  interpreter itself no longer includes either library, and `docs/modules.md`
+  says how to write a module. Pages do not change. `cl words` now ends with
+  the modules in the build. Building by hand with SQLite is
+  `cc -DCL_SQLITE -o cl src/cl.c src/mod_sqlite.c -lsqlite3`.
+- Fixed: a verb that opened a database while its page already had one open,
+  then asked it, read the closed handle. Opening a database now always closes
+  the one before it, and the new one answers.
+- An address no module can open, like `mysql://...`, now says what this build
+  can open instead of looking for a file by that name.
+
 ## 0.5.0 (2026-11-01)
 
 - New: `include "/header.html"` starts from the site's top folder (the folder `cl serve` serves, the web root under `cl cgi`, or the folder you run `cl` from), so pages in subfolders can share one header instead of copying it. `..` is still refused.

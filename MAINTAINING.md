@@ -24,7 +24,7 @@ to `main` directly. There is no CI on GitHub yet, so the agent is the test run:
    of done below. Paste the last lines of `make test` and `make sanitize` into
    the pull request, with the system and compiler they ran on.
 3. **A person reviews and merges.** Files in
-   [`.github/CODEOWNERS`](.github/CODEOWNERS) (the interpreter `src/cl.c`,
+   [`.github/CODEOWNERS`](.github/CODEOWNERS) (the interpreter and its modules in `src/`,
    `.github/`, `scripts/`, the `Makefile`, these agent instructions, and the
    legal and policy files) always need their owner's review. Do not turn on
    auto-merge: without CI there is nothing to check a pull request before it
@@ -83,8 +83,9 @@ If an issue asks for any of these, label it `needs-human` and stop.
   session and password code needs a test proving the rule still holds.
 - Never add an alias. A second spelling goes in `SYNONYMS`, so the error points
   to the one real word.
-- Never add a required dependency. Plain C11, one file, `make` with nothing
-  installed must still build and pass `make test`.
+- Never add a required dependency. Plain C11, and `make` with nothing
+  installed must still build and pass `make test`. A library goes in a module
+  (`docs/modules.md`), never in `src/cl.c`.
 - Never accept code, text or assets whose author or license is unclear, and
   never add third-party code or a library without a person's agreement. Its
   license must be compatible with Apache 2.0, and its notice goes in `NOTICE`.
@@ -116,7 +117,7 @@ make agents              # if any word, meaning, example or skills/SKILL.head.md
 
 - The pull request shows the results: the last lines of `make test` and
   `make sanitize`, and where they ran. Memory leaks are only detected on Linux
-  (macOS has no LeakSanitizer); for changes to `src/cl.c`, run the leak check in
+  (macOS has no LeakSanitizer); for changes to `src/`, run the leak check in
   a Linux container as "Checking for leaks" in CONTRIBUTING.md shows.
 - A new error path holds what it allocated across `fail()`: wrap values in
   `held_push` / `held_pop` (see "Checking for leaks" in CONTRIBUTING.md).

@@ -121,7 +121,8 @@ you built. `AGENTS.md` in this repository is for agents working on Common itself
 ## Layout
 
 ```
-src/cl.c          the whole interpreter and dev server, one file
+src/cl.c          the interpreter and dev server: the language, in one file
+src/cl_module.h   the module interface; mod_sqlite.c and mod_postgres.c are the modules
 docs/             dictionary, design notes, install and deploy guides
 examples/         hello.html
 editor/vscode/    syntax highlighting for VS Code

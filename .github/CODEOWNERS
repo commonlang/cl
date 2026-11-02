@@ -1,8 +1,9 @@
 # A pull request that touches any of these needs this owner's review, even when
 # an agent opened it (see MAINTAINING.md).
 
-# The interpreter: the language, its safety rules, sessions, email.
-/src/cl.c                @brightbirdapp
+# The interpreter and its modules: the language, its safety rules, sessions,
+# email, the module interface and the database drivers.
+/src/                    @brightbirdapp
 
 # Automation and the build: templates, CODEOWNERS itself.
 /.github/                @brightbirdapp

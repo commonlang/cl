@@ -14,6 +14,10 @@ CC      ?= cc
 CFLAGS  ?= -O2 -Wall -Wextra -std=c11
 PREFIX  ?= /usr/local
 
+# The core is the language; each library is a module behind src/cl_module.h,
+# added to the build only when the library is installed.
+SRC     := src/cl.c
+
 # Optional Postgres: on if pg_config is installed (Homebrew: brew install libpq; Debian: apt install libpq-dev).
 PG_CONFIG := $(shell command -v pg_config 2>/dev/null || ls /opt/homebrew/opt/libpq/bin/pg_config 2>/dev/null)
 ifneq ($(PG_CONFIG),)
@@ -23,6 +27,7 @@ ifneq ($(PG_CONFIG),)
 endif
 ifeq ($(PG_OK),yes)
   CFLAGS += -DCL_POSTGRES -I$(PG_INC)
+  SRC    += src/mod_postgres.c
   LDLIBS += -L$(PG_LIB) -lpq
 endif
 
@@ -31,18 +36,19 @@ endif
 SQLITE_OK := $(shell echo 'int main(void){return 0;}' | $(CC) -x c -include sqlite3.h - -o /dev/null -lsqlite3 2>/dev/null && echo yes)
 ifeq ($(SQLITE_OK),yes)
   CFLAGS += -DCL_SQLITE
+  SRC    += src/mod_sqlite.c
   LDLIBS += -lsqlite3
 endif
 
-cl: src/cl.c
-	$(CC) $(CFLAGS) -o cl src/cl.c $(LDLIBS)
+cl: $(SRC) src/cl_module.h
+	$(CC) $(CFLAGS) -o cl $(SRC) $(LDLIBS)
 	@echo "built cl (SQLite: $(if $(SQLITE_OK),yes,no), Postgres: $(if $(PG_OK),yes,no))"
 
 test: cl
 	sh tests/run.sh
 
-sanitize: src/cl.c
-	$(CC) -g -O1 -Wall -Wextra -std=c11 $(if $(SQLITE_OK),-DCL_SQLITE) $(if $(PG_OK),-DCL_POSTGRES -I$(PG_INC)) -fsanitize=address,undefined -fno-omit-frame-pointer -o cl src/cl.c $(LDLIBS)
+sanitize: $(SRC) src/cl_module.h
+	$(CC) -g -O1 -Wall -Wextra -std=c11 $(if $(SQLITE_OK),-DCL_SQLITE) $(if $(PG_OK),-DCL_POSTGRES -I$(PG_INC)) -fsanitize=address,undefined -fno-omit-frame-pointer -o cl $(SRC) $(LDLIBS)
 	sh tests/run.sh
 	$(MAKE) clean
 

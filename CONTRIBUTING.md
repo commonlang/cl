@@ -24,10 +24,13 @@ By taking part you agree to follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 5. **Safe by default.** Anything that comes from a visitor is untrusted and
    escaped. A new source of visitor data (forms, cookies, files) must set
    `untrusted` on the values it produces.
-6. **One C file, no required dependencies.** The interpreter and dev server
-   stay in `src/cl.c`, C11, building with `make` on macOS, Linux and Windows.
-   A library may be used only if it is optional, detected by the Makefile,
-   and the build works without it. SQLite and Postgres are the models.
+6. **A small core, no required dependencies.** The language, the dev server
+   and the safety rules stay in `src/cl.c`, C11, building with `make` on
+   macOS, Linux and Windows with nothing installed. A library is never
+   included there: it goes in a module, `src/mod_NAME.c`, behind the interface
+   in `src/cl_module.h`, optional and detected by the Makefile, and the build
+   works without it. SQLite and Postgres are the models; `docs/modules.md`
+   says how to write one.
 7. **Lowercase words, lines, and `end`.** No new punctuation. No braces, no
    sigils, no symbols beyond `+ - * / ( ) , " #`.
 

@@ -13,7 +13,11 @@
  *   cl version
  *
  * Build: make (SQLite and Postgres are added when installed), or by hand:
- *   cc -O2 -o cl src/cl.c   (add -lws2_32 on Windows)
+ *   cc -O2 -o cl src/cl.c   (add -lws2_32 on Windows; no database words)
+ *   cc -O2 -DCL_SQLITE -o cl src/cl.c src/mod_sqlite.c -lsqlite3
+ *
+ * Libraries live in modules, src/mod_*.c, behind the small interface in
+ * src/cl_module.h. This file is the language: it never includes a library.
  *
  * The vocabulary is the DICTIONARY table below: one accepted form for every
  * word. docs/dictionary.md explains each one, and SYNONYMS turns words from
@@ -49,12 +53,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <stdint.h>
-#ifdef CL_SQLITE
-#  include <sqlite3.h>      /* optional: the Makefile defines CL_SQLITE when SQLite is installed */
-#endif
-#ifdef CL_POSTGRES
-#  include <libpq-fe.h>     /* optional: the Makefile defines CL_POSTGRES when libpq is installed */
-#endif
+#include "cl_module.h"      /* Value, and the interface the database modules are behind */
 
 /* ------------------------------------------------------------------ */
 /* Platform: the server needs sockets, which differ on Windows.        */
@@ -405,41 +404,26 @@ static void print_words_markdown(void) {
     }
 }
 
+static int db_available(void);
+static void print_modules(void);
 static void print_words(void) {
     printf("Common (CL) %s. One form each. Details: docs/dictionary.md\n\n", CL_VERSION);
+    int has_db = db_available();
     for (size_t i = 0; i < NWORDS; i++) {
         const Word *w = &DICTIONARY[i];
         if (!w->form) continue;
-#ifndef CL_SQLITE
-        if (!strcmp(w->word, "open") || !strcmp(w->word, "ask") || !strcmp(w->word, "tell") || !strcmp(w->word, "of")) continue;
-#endif
+        if (!has_db && (!strcmp(w->word, "open") || !strcmp(w->word, "ask") || !strcmp(w->word, "tell") || !strcmp(w->word, "of"))) continue;
         printf("  %-28s %s\n", w->form, w->meaning);
     }
-#ifndef CL_SQLITE
-    printf("  (database words are off: this build has no SQLite)\n");
-#endif
-#ifdef CL_POSTGRES
-    printf("\nThis build can also open database \"postgres://user:password@host/dbname\".\n");
-#endif
+    if (!has_db) printf("  (database words are off: this build has no database module. Install SQLite and run make again)\n");
     printf("\nAlso: \"text in quotes with [values] inside\", + - * / ( ) for math, # for comments.\n");
+    print_modules();
 }
 
 /* ================================================================== */
 /* Values: text, numbers, yes/no, lists                                */
+/* The Value struct itself is in cl_module.h, shared with the modules. */
 /* ================================================================== */
-
-typedef enum { V_TEXT, V_NUM, V_BOOL, V_LIST, V_RECORD } VType;
-
-typedef struct Value {
-    VType  t;
-    char  *s;              /* V_TEXT */
-    double n;              /* V_NUM, V_BOOL */
-    struct Value *items;   /* V_LIST and V_RECORD */
-    char **keys;           /* V_RECORD: one name per item */
-    int    count, cap;
-    int    untrusted;      /* text typed by a visitor: escaped when shown or joined */
-    int    tainted;        /* text with a visitor's value filled into it: fine to show, never SQL or a file name */
-} Value;
 
 static Value v_text(const char *s) { Value v = { V_TEXT, xstrdup(s), 0, NULL, NULL, 0, 0, 0, 0 }; return v; }
 static Value v_num(double d)       { Value v = { V_NUM,  NULL, d, NULL, NULL, 0, 0, 0, 0 };     return v; }
@@ -630,7 +614,7 @@ typedef struct Env {
     struct Env *parent, *root;                /* a verb runs in a child env; sessions and redirects live on the root */
     Buf *out;                                 /* where 'show' writes right now */
     Value gave; int has_gave;                 /* set by 'give' inside a verb */
-    int depth; int borrowed_db;
+    int depth;
     const char *hint_prefix; int hint_skip;   /* "show" / "set NAME to": how to quote the rest of the line */
     const char *hint_name;                    /* for "set NAME to": the name, so the hint is built only on an error */
     long steps;            /* statements run, for the sandbox limit */
@@ -639,8 +623,8 @@ typedef struct Env {
     int stopped;           /* 'go to' ran: stop the page */
     char dir[2048];        /* folder of the page, for include */
     int include_depth;
-    void *db;              /* sqlite3* when a SQLite database is open */
-    void *pg;              /* PGconn* when a Postgres database is open */
+    const CLDatabase *dbdrv;  /* the module that opened the database: on the root env only */
+    void *db;                 /* its handle, while a database is open */
 } Env;
 
 static void env_init(Env *e, const char *page_path, const char *query, const char *body, const char *url_path, const char *cookie) {
@@ -655,12 +639,7 @@ static void env_free(Env *e) {
     free(e->skeys); free(e->svals);
     for (int i = 0; i < e->vn; i++) { free(e->verbs[i].name); for (int a = 0; a < e->verbs[i].argc; a++) free(e->verbs[i].args[a]); free(e->verbs[i].args); free(e->verbs[i].body); lines_free(e->verbs[i].lines); }
     free(e->verbs);
-#ifdef CL_SQLITE
-    if (e->db && !e->borrowed_db) sqlite3_close((sqlite3 *)e->db);
-#endif
-#ifdef CL_POSTGRES
-    if (e->pg && !e->borrowed_db) PQfinish((PGconn *)e->pg);
-#endif
+    if (e->db && e->dbdrv) e->dbdrv->close(e->db);
 }
 
 static Verb *verb_find(Env *e, const char *name) {
@@ -1243,195 +1222,134 @@ static char *plain_text(const Value *v) {
 }
 
 /* ------------------------------------------------------------------ */
-/* Databases (SQLite, optional)                                        */
+/* Modules: optional capabilities compiled in behind cl_module.h.       */
+/* The core knows the words; a module knows a library. The Makefile    */
+/* links src/mod_*.c for each library it finds and defines CL_SQLITE   */
+/* or CL_POSTGRES so modules_load() calls that module's entry point.   */
 /* ------------------------------------------------------------------ */
 
-static int is_pg_address(const char *s) { return !strncmp(s, "postgres://", 11) || !strncmp(s, "postgresql://", 13); }
+static Value v_untrusted_text(const char *s) { Value v = v_text(s); v.untrusted = 1; return v; }
 
-static NOINLINE void db_open(Env *e, const char *file) {
-    if (e->root && e->root != e) e = e->root;
-    if (is_pg_address(file)) {
-#ifdef CL_POSTGRES
-        if (e->pg) { PQfinish((PGconn *)e->pg); e->pg = NULL; }
-        PGconn *c = PQconnectdb(file);
-        if (PQstatus(c) != CONNECTION_OK) {
-            char m[300]; snprintf(m, sizeof m, "%s", PQerrorMessage(c));
-            for (char *x = m; *x; x++) if (*x == '\n') *x = ' ';
-            PQfinish(c);
-            fail("cannot reach the Postgres database: %s", m);
-        }
-        e->pg = c;
-        return;
-#else
-        fail("this build of Common has no Postgres support. Install libpq (the Postgres client library) and run make again");
-#endif
-    }
+/* What a module may call. One table for the whole run; see CLHost in cl_module.h. */
+static const CLHost g_host = {
+    CL_MODULE_API, CL_VERSION,
+    fail,
+    v_text, v_untrusted_text, v_num, v_bool, v_list, v_record, list_add, record_add, v_free,
+    plain_text, type_name
+};
+
+#define MAX_MODULES 16
+static const CLModule *g_modules[MAX_MODULES]; static int g_nmodules;
+
+/* Called once as cl starts. The list is every module the build linked in; a
+   loader for shared libraries would add what it finds to g_modules here. */
+static void modules_load(void) {
+    static const cl_module_entry_fn builtin[] = {
 #ifdef CL_SQLITE
-    char path[4096]; snprintf(path, sizeof path, "%s/%s", e->dir, file);
-    if (e->db) { sqlite3_close((sqlite3 *)e->db); e->db = NULL; }
-    sqlite3 *db = NULL;
-    if (sqlite3_open_v2(path, &db, SQLITE_OPEN_READWRITE, NULL) != SQLITE_OK) {
-        char m[256]; snprintf(m, sizeof m, "%s", db ? sqlite3_errmsg(db) : "unknown error");
-        if (db) sqlite3_close(db);
-        fail("cannot open the database \"%s\" (looked next to the page): %s", file, m);
-    }
-    sqlite3_busy_timeout(db, 3000);     /* another request is writing: wait up to 3 s instead of failing */
-    e->db = db;
-#else
-    (void)e;
-    fail("this build of Common has no database support, so \"%s\" cannot be opened. Install SQLite and run make again", file);
+        cl_module_sqlite,
 #endif
-}
-
-#ifdef CL_SQLITE
-/* Prepare SQL and bind the values after 'with'. */
-static sqlite3_stmt *db_prepare(Env *e, const char *sql, Value *params) {
-    if (!e->db) fail("no database is open. Write: open database \"file.db\" first");
-    sqlite3 *db = (sqlite3 *)e->db;
-    sqlite3_stmt *st = NULL;
-    if (sqlite3_prepare_v2(db, sql, -1, &st, NULL) != SQLITE_OK) {
-        char m[256]; snprintf(m, sizeof m, "%s", sqlite3_errmsg(db));
-        sqlite3_finalize(st);
-        fail("the database did not understand the query: %s", m);
-    }
-    int want = sqlite3_bind_parameter_count(st);
-    if (want != params->count) {
-        sqlite3_finalize(st);
-        fail("the query has %d question mark%s but %d value%s came after 'with'", want, want == 1 ? "" : "s",
-             params->count, params->count == 1 ? "" : "s");
-    }
-    for (int i = 0; i < params->count; i++) {
-        Value *p = &params->items[i];
-        if (p->t == V_TEXT)      { char *t = plain_text(p); sqlite3_bind_text(st, i + 1, t, -1, SQLITE_TRANSIENT); free(t); }
-        else if (p->t == V_NUM)  { if (p->n == (double)(long long)p->n) sqlite3_bind_int64(st, i + 1, (long long)p->n); else sqlite3_bind_double(st, i + 1, p->n); }
-        else if (p->t == V_BOOL) sqlite3_bind_int(st, i + 1, p->n != 0);
-        else { sqlite3_finalize(st); fail("can only send text, numbers or yes/no to the database, not %s", type_name(p->t)); }
-    }
-    return st;
-}
-#endif
-
 #ifdef CL_POSTGRES
-/* Postgres numbers its parameters $1, $2 ...; Common writes ? like SQLite. Convert outside quotes. */
-static char *pg_sql(const char *sql, int *count) {
-    Buf *b = buf_new(); int inq = 0, n = 0;
-    for (const char *p = sql; *p; p++) {
-        if (*p == '\'') inq = !inq;
-        if (*p == '?' && !inq) { char t[16]; snprintf(t, sizeof t, "$%d", ++n); buf_puts(b, t); }
-        else buf_putc(b, *p);
-    }
-    *count = n;
-    char *out = xstrdup(b->data); buf_free(b); return out;
-}
-
-/* Run SQL on Postgres with the values after 'with' bound as text. Returns the result or fails. */
-static PGresult *pg_run(Env *e, const char *sql, Value *params) {
-    PGconn *c = (PGconn *)e->root->pg;
-    int want; char *q = pg_sql(sql, &want);
-    if (want != params->count) {
-        free(q);
-        fail("the query has %d question mark%s but %d value%s came after 'with'", want, want == 1 ? "" : "s", params->count, params->count == 1 ? "" : "s");
-    }
-    const char **vals = malloc(sizeof(char *) * (size_t)(params->count + 1));
-    for (int i = 0; i < params->count; i++) {
-        Value *p = &params->items[i];
-        if (p->t == V_LIST || p->t == V_RECORD) { free(vals); free(q); fail("can only send text, numbers or yes/no to the database, not %s", type_name(p->t)); }
-        vals[i] = p->t == V_BOOL ? (p->n ? "true" : "false") : plain_text(p);
-    }
-    PGresult *r = PQexecParams(c, q, params->count, NULL, vals, NULL, NULL, 0);
-    for (int i = 0; i < params->count; i++) if (params->items[i].t != V_BOOL) free((char *)vals[i]);
-    free(vals); free(q);
-    ExecStatusType st = PQresultStatus(r);
-    if (st != PGRES_TUPLES_OK && st != PGRES_COMMAND_OK) {
-        char m[300]; snprintf(m, sizeof m, "%s", PQresultErrorMessage(r));
-        for (char *x = m; *x; x++) if (*x == '\n') *x = ' ';
-        PQclear(r);
-        fail("the database did not understand the query: %s", m);
-    }
-    return r;
-}
-
-static Value pg_rows(PGresult *r) {
-    Value rows = v_list();
-    int nr = PQntuples(r), nf = PQnfields(r);
-    for (int i = 0; i < nr; i++) {
-        Value rec = v_record();
-        for (int f = 0; f < nf; f++) {
-            Value cv; Oid t = PQftype(r, f);
-            if (PQgetisnull(r, i, f)) cv = v_text("");
-            else if (t == 20 || t == 21 || t == 23 || t == 700 || t == 701 || t == 1700) cv = v_num(strtod(PQgetvalue(r, i, f), NULL));
-            else if (t == 16) cv = v_bool(PQgetvalue(r, i, f)[0] == 't');
-            else { cv = v_text(PQgetvalue(r, i, f)); cv.untrusted = 1; }
-            record_add(&rec, PQfname(r, f), cv);
-        }
-        list_add(&rows, rec);
-    }
-    return rows;
-}
+        cl_module_postgres,
 #endif
+        NULL
+    };
+    for (int i = 0; builtin[i]; i++) {
+        const CLModule *m = builtin[i](&g_host);
+        if (!m || m->api != CL_MODULE_API) {
+            fprintf(stderr, "cl: the module %s was built for another version of the module interface (%d; this cl has %d). Run make clean, then make\n",
+                    m ? m->name : "?", m ? m->api : 0, CL_MODULE_API);
+            exit(2);
+        }
+        if (g_nmodules < MAX_MODULES) g_modules[g_nmodules++] = m;
+    }
+}
+
+/* The n-th capability of a kind, or NULL: for (i = 0; (d = capability(kind, i)); i++) */
+static const void *capability(CLCapKind kind, int n) {
+    for (int i = 0; i < g_nmodules; i++)
+        for (int c = 0; c < g_modules[i]->ncaps; c++)
+            if (g_modules[i]->caps[c].kind == kind && n-- == 0) return g_modules[i]->caps[c].table;
+    return NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Databases: the words are here, the drivers are modules.              */
+/* ------------------------------------------------------------------ */
+
+static int db_available(void) { return capability(CL_CAP_DATABASE, 0) != NULL; }
+
+/* The open database lives on the page's root environment, so a verb sees the
+   database its page opened, and a database a verb opens stays open for the page. */
+static Env *db_env(Env *e) { return e->root ? e->root : e; }
+
+static void db_close(Env *r) {
+    if (r->db && r->dbdrv) r->dbdrv->close(r->db);
+    r->db = NULL; r->dbdrv = NULL;
+}
+
+/* Every kind of address this build opens, for an error: 'a file next to the page
+   (open database "site.db") or a Postgres server (open database "postgres://...")' */
+static void db_kinds(char *out, size_t cap) {
+    out[0] = 0;
+    const CLDatabase *d;
+    for (int i = 0; (d = capability(CL_CAP_DATABASE, i)); i++) {
+        size_t n = strlen(out);
+        snprintf(out + n, cap - n, "%s%s (open database \"%s\")", i ? " or " : "", d->where, d->example);
+    }
+}
+
+static NOINLINE void db_open(Env *e, const char *address) {
+    Env *r = db_env(e);
+    const CLDatabase *d = NULL, *x;
+    for (int i = 0; (x = capability(CL_CAP_DATABASE, i)); i++) if (x->claims(address)) { d = x; break; }
+    if (!d) {
+        if (!db_available()) fail("this build of Common has no database support, so \"%s\" cannot be opened. Install SQLite and run make again", address);
+        if (!strncmp(address, "postgres://", 11) || !strncmp(address, "postgresql://", 13))
+            fail("this build of Common has no Postgres support. Install libpq (the Postgres client library) and run make again");
+        char kinds[512]; db_kinds(kinds, sizeof kinds);
+        fail("cannot open the database \"%s\": this build of Common opens %s", address, kinds);
+    }
+    db_close(r);                                   /* one database at a time: the last one opened */
+    r->db = d->open(&g_host, address, r->dir);
+    r->dbdrv = d;
+}
+
+/* The open database, or the error for having none. */
+static const CLDatabase *db_need(Env *e, void **handle) {
+    Env *r = db_env(e);
+    if (!r->db) {
+        if (!db_available()) fail("this build of Common has no database support. Install SQLite and run make again");
+        fail("no database is open. Write: open database \"file.db\" first");
+    }
+    *handle = r->db;
+    return r->dbdrv;
+}
 
 /* Run SQL with bound parameters. Returns a list of records, one per row. */
 static Value db_ask(Env *e, const char *sql, Value *params) {
-#ifdef CL_POSTGRES
-    if (e->root->pg) { PGresult *r = pg_run(e, sql, params); Value rows = pg_rows(r); PQclear(r); return rows; }
-#endif
-#ifdef CL_SQLITE
-    sqlite3 *db = (sqlite3 *)e->db;
-    sqlite3_stmt *st = db_prepare(e, sql, params);
-    Value rows = v_list();
-    int rc;
-    while ((rc = sqlite3_step(st)) == SQLITE_ROW) {
-        Value r = v_record();
-        int nc = sqlite3_column_count(st);
-        for (int c = 0; c < nc; c++) {
-            Value cv;
-            switch (sqlite3_column_type(st, c)) {
-                case SQLITE_INTEGER: cv = v_num((double)sqlite3_column_int64(st, c)); break;
-                case SQLITE_FLOAT:   cv = v_num(sqlite3_column_double(st, c)); break;
-                case SQLITE_NULL:    cv = v_text(""); break;
-                default: {
-                    const unsigned char *t = sqlite3_column_text(st, c);
-                    cv = v_text(t ? (const char *)t : "");
-                    cv.untrusted = 1;            /* stored text may have come from a visitor */
-                }
-            }
-            record_add(&r, sqlite3_column_name(st, c), cv);
-        }
-        list_add(&rows, r);
-    }
-    if (rc != SQLITE_DONE) {
-        char m[256]; snprintf(m, sizeof m, "%s", sqlite3_errmsg(db));
-        sqlite3_finalize(st); v_free(&rows);
-        fail("the database stopped: %s", m);
-    }
-    sqlite3_finalize(st);
-    return rows;
-#else
-    (void)e; (void)sql; (void)params;
-    fail("this build of Common has no database support. Install SQLite and run make again");
-#endif
+    void *h; const CLDatabase *d = db_need(e, &h);
+    return d->ask(&g_host, h, sql, params);
 }
 
 /* Run SQL that changes the database. */
 static void db_tell(Env *e, const char *sql, Value *params) {
-#ifdef CL_POSTGRES
-    if (e->root->pg) { PGresult *r = pg_run(e, sql, params); PQclear(r); return; }
-#endif
-#ifdef CL_SQLITE
-    sqlite3 *db = (sqlite3 *)e->db;
-    sqlite3_stmt *st = db_prepare(e, sql, params);
-    int rc;
-    while ((rc = sqlite3_step(st)) == SQLITE_ROW) { }
-    if (rc != SQLITE_DONE) {
-        char m[256]; snprintf(m, sizeof m, "%s", sqlite3_errmsg(db));
-        sqlite3_finalize(st);
-        fail("the database refused: %s", m);
+    void *h; const CLDatabase *d = db_need(e, &h);
+    d->tell(&g_host, h, sql, params);
+}
+
+/* For `cl words`: the modules in this build and what each one opens. */
+static void print_modules(void) {
+    if (!g_nmodules) return;
+    printf("\nModules in this build:\n");
+    for (int i = 0; i < g_nmodules; i++) {
+        const CLModule *m = g_modules[i];
+        printf("  %-10s %s", m->name, m->library);
+        for (int c = 0; c < m->ncaps; c++) if (m->caps[c].kind == CL_CAP_DATABASE) {
+            const CLDatabase *d = m->caps[c].table;
+            printf(": open database \"%s\", %s", d->example, d->where);
+        }
+        printf("\n");
     }
-    sqlite3_finalize(st);
-#else
-    (void)e; (void)sql; (void)params;
-    fail("this build of Common has no database support. Install SQLite and run make again");
-#endif
 }
 
 static Value parse_expr(Env *e, Toks *T);
@@ -2424,7 +2342,6 @@ static Value verb_call(Env *e, Verb *vb, Value *args, Buf *out, int as_value) {
     c->query = e->query; c->body = e->body; c->path = e->path; c->cookie = e->cookie;
     snprintf(c->dir, sizeof c->dir, "%s", e->dir);
     c->include_depth = e->include_depth; c->sandbox = e->sandbox; c->steps = e->steps;
-    c->db = e->root->db; c->pg = e->root->pg; c->borrowed_db = 1;
     c->parent = e; c->root = e->root; c->depth = e->depth + 1;
     c->out = out ? out : e->out;
     for (int a = 0; a < vb->argc; a++) env_set(c, vb->args[a], v_copy(&args->items[a]));
@@ -2432,9 +2349,7 @@ static Value verb_call(Env *e, Verb *vb, Value *args, Buf *out, int as_value) {
     int saved_line = cur_line;
     exec_lines(c, L, 0, L->n, c->out);
     cur_line = saved_line;
-    e->steps = c->steps;
-    if (e->root->db == NULL && c->db) { e->root->db = c->db; c->borrowed_db = 1; }   /* a verb may open the database */
-    if (e->root->pg == NULL && c->pg) { e->root->pg = c->pg; c->borrowed_db = 1; }
+    e->steps = c->steps;                            /* the database, if the verb opened one, is on the root already */
 
     Value r; int gave = c->has_gave;
     if (gave) { r = c->gave; memset(&c->gave, 0, sizeof c->gave); c->has_gave = 0; }
@@ -3584,6 +3499,7 @@ static void usage(void) {
 
 int main(int argc, char **argv) {
     stack_setup();                                           /* see stack_check */
+    modules_load();                                          /* the databases this build was linked with */
     if (argc < 2) usage();
 
     if (strcmp(argv[1], "words") == 0) {

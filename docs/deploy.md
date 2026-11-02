@@ -22,7 +22,7 @@ a static `cl` with SQLite inside it, so the server needs no libraries. On any
 Linux x86-64 machine, or in a container (`docker run --rm -v "$PWD":/w -w /w gcc:13 ...`):
 
 ```sh
-gcc -O2 -std=c11 -DCL_SQLITE -static -o cl src/cl.c -lsqlite3 -lpthread -ldl -lm
+gcc -O2 -std=c11 -DCL_SQLITE -static -o cl src/cl.c src/mod_sqlite.c -lsqlite3 -lpthread -ldl -lm
 ./cl version     # check it is the version you expect before uploading
 ```
 
@@ -72,7 +72,7 @@ RewriteRule ^([^./]+)(/.*)?$ /cgi-bin/cl/$1.html [L,QSA]
 ```
 
 Over SSH instead: `mkdir -p ~/public_html/cgi-bin && cp cl ~/public_html/cgi-bin/ && chmod 755 ~/public_html/cgi-bin/cl`.
-If the host has gcc and SQLite headers, you can also build there: `gcc -O2 -std=c11 -DCL_SQLITE -o cgi-bin/cl src/cl.c -lsqlite3`.
+If the host has gcc and SQLite headers, you can also build there: `gcc -O2 -std=c11 -DCL_SQLITE -o cgi-bin/cl src/cl.c src/mod_sqlite.c -lsqlite3`.
 
 **If it does not work**
 

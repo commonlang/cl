@@ -75,6 +75,51 @@ else
   echo "(this build has no SQLite, database tests skipped)"
 fi
 
+# 3c1. Modules: each database driver is a module behind src/cl_module.h; the words and
+# their errors are the core's and must not change. Regression tests for the split.
+if [ -n "$has_db" ]; then
+  t=$(mktemp -d); fixture_db $t/a.db
+  sqlite3 $t/b.db "create table recipes (id integer primary key, name text); insert into recipes (name) values ('From b')"
+  ./cl words | grep -q '^Modules in this build:'                                 || fail "cl words lists the modules"
+  ./cl words | grep -q '^  sqlite .*SQLite .*open database "site.db"'            || fail "cl words names the SQLite module"
+  printf '<cl>open database "a.db"\nopen database "b.db"\nshow "[name of first of ask database "select name from recipes"]"</cl>' > $t/two.html
+  [ "$(./cl $t/two.html)" = "From b" ]                                            || fail "opening a second database replaces the first"
+  printf '<cl>to connect\n  open database "a.db"\nend\nconnect\nshow "[count of ask database "select * from recipes"]"</cl>' > $t/verb1.html
+  [ "$(./cl $t/verb1.html)" = "2" ]                                               || fail "a database a verb opened stays open for the page"
+  printf '<cl>open database "a.db"\nto names\n  give ask database "select name from recipes"\nend\nshow "[count of names]"</cl>' > $t/verb2.html
+  [ "$(./cl $t/verb2.html)" = "2" ]                                               || fail "a verb asks the database its page opened"
+  printf '<cl>open database "a.db"\nto switch\n  open database "b.db"\n  give ask database "select name from recipes"\nend\nset r to switch\nshow "[name of first of r]|[name of first of ask database "select name from recipes"]"</cl>' > $t/verb3.html
+  [ "$(./cl $t/verb3.html)" = "From b|From b" ]                                   || fail "a verb that opens another database asks the new one (it used to read the closed handle)"
+  printf '<cl>open database "mysql://user@host/db"</cl>' > $t/scheme.html
+  ./cl $t/scheme.html | grep -q 'cannot open the database &quot;mysql://user@host/db&quot;: this build of Common opens a file next to the page (open database &quot;site.db&quot;)' || fail "an address no module claims says what this build opens"
+  rm -rf $t
+fi
+# The core builds and runs with no module linked (plain cc src/cl.c, as the docs say);
+# the database words are then off, with an error that says what to install.
+if command -v cc >/dev/null 2>&1; then
+  t=$(mktemp -d)
+  cc -std=c11 -o $t/cl-bare src/cl.c 2>$t/cc.log || { cat $t/cc.log; fail "the core builds with no module"; }
+  $t/cl-bare words | grep -q 'ask database'                                        && fail "a build without modules must not list the database words"
+  $t/cl-bare words | grep -q 'database words are off'                             || fail "a build without modules says the database words are off"
+  $t/cl-bare words | grep -q 'Modules in this build'                              && fail "a build without modules lists none"
+  printf '<cl>open database "x.db"</cl>' > $t/o.html
+  $t/cl-bare $t/o.html | grep -q 'no database support, so &quot;x.db&quot; cannot be opened. Install SQLite' || fail "open database without a module says what to install"
+  printf '<cl>set r to ask database "select 1"</cl>' > $t/a.html
+  $t/cl-bare $t/a.html | grep -q 'no database support. Install SQLite'            || fail "ask database without a module says what to install"
+  printf '<cl>set x to 2\nshow "[x * 21]"</cl>' > $t/s.html
+  [ "$($t/cl-bare $t/s.html)" = "42" ]                                            || fail "the core runs pages with no module"
+  if [ -n "$has_db" ]; then
+    cc -std=c11 -DCL_SQLITE -o $t/cl-sqlite src/cl.c src/mod_sqlite.c -lsqlite3 2>$t/cc.log || { cat $t/cc.log; fail "the core builds with only the SQLite module"; }
+    printf '<cl>open database "postgres://user:pw@host/db"</cl>' > $t/pg.html
+    $t/cl-sqlite $t/pg.html | grep -q 'no Postgres support. Install libpq'        || fail "a build without the Postgres module says what to install"
+    $t/cl-sqlite words | grep -q '^  postgres '                                    && fail "a build without the Postgres module must not list it"
+    $t/cl-sqlite words | grep -q '^  sqlite '                                      || fail "a build with only the SQLite module lists it"
+  fi
+  rm -rf $t
+else
+  echo "(no cc: the build of the core without modules is not tested)"
+fi
+
 t=$(mktemp -d); command -v sqlite3 >/dev/null && fixture_db $t/site.db
 # 3a9. comparing a list with one value is a teaching error, not a quiet no
 printf '<cl>set status to "Working", "At Desk"\nif status is "At Desk"\n  show "y"\nend</cl>' > $t/_t.html
