@@ -141,3 +141,19 @@ a literal [bracket] and a h with quotes
 <pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 271: a line cannot start with 'age'. Did you mean 'show age' or 'set age to ...'?</pre>
 <pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 272: text goes in double quotes, like &quot;this&quot;</pre>
 <pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 274: there is no item 3. The list has 2 items</pre>
+<p>json</p>
+3 a, b '' no café "hi"
+{"x":3,"tags":["a","b"],"none":"","ok":false,"say":"café \"hi\""}
+{"name":"Ada \u003cscript\u003e","qty":2.5,"tags":["a","b"]}
+&quot;\u003cb\u003ex\u003c/b\u003e&quot;
+1 2
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 289: the text given to 'read json' is not JSON: names go in double quotes, not single ones (line 1, letter 2)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 290: the text given to 'read json' is not JSON: the comma before ] has nothing after it (line 1, letter 4)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 291: the text given to 'read json' is not JSON: expected : after the name (line 1, letter 6)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 292: the text given to 'read json' is not JSON: after \ JSON only knows \&quot; \\ \/ \b \f \n \r \t and \uXXXX (line 1, letter 3)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 293: the text given to 'read json' is not JSON: expected a value: text in double quotes, a number, true, false, null, [ or { (line 1, letter 1)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 294: the text given to 'read json' is not JSON: there is more after the end of the value (line 1, letter 3)</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 295: 'read json' needs JSON text, like form &quot;order&quot; or a text you wrote, not a number</pre>
+2
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 297: 'curl' is not a Common word. Use 'fetch'</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 298: 'fetch' needs an address in quotes: fetch &quot;https://api.example.com/posts&quot;</pre>

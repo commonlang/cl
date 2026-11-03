@@ -42,8 +42,9 @@ shared hosting; use a normal `make` on a server where you control the packages.
    sign-in cookies, outside the web root: in `~/.common/public_html/`, readable
    only by you. (If that folder cannot be made, it goes next to the pages, and
    the `.htaccess` keeps it private. `SetEnv CL_PRIVATE_DIR /some/folder`
-   chooses another place.) Wrong-password counts (`login.log`) and, with
-   `CL_MAIL=outbox`, saved emails go there too. Then lock down the data:
+   chooses another place.) Wrong-password counts (`login.log`), `cl.keys` (the
+   keys `fetch` sends to other sites) and, with `CL_MAIL=outbox`, saved emails
+   go there too. Then lock down the data:
    `chmod 600 site.db`. Shared hosts run CGI
    as your own account (suEXEC), so `600` keeps other customers out.
 
@@ -53,8 +54,8 @@ shared hosting; use a normal `make` on a server where you control the packages.
 # cgi-bin folder with the cl program in it; cPanel hosts have both.
 RewriteEngine on
 
-# Never send databases, seeds, the session secret or saved email.
-RewriteRule \.(db|sqlite|sqlite3|sql|secret|eml|log)$ - [F,NC]
+# Never send databases, seeds, the session secret, API keys or saved email.
+RewriteRule \.(db|sqlite|sqlite3|sql|secret|keys|eml|log)$ - [F,NC]
 RewriteRule \.db-(journal|wal|shm)$ - [F,NC]
 RewriteRule (^|/)outbox(/|$) - [F,NC]
 
@@ -192,6 +193,15 @@ sendmail, is not built in yet.
 - `cl.secret` signs session cookies. Common creates it on first use (outside
   the web root under `cl cgi`), readable only by you, and never serves it. If it
   ever leaks, delete it: everyone is signed out and a new one is made.
+- `cl.keys` holds the keys `fetch` sends to other sites, one line per host
+  (see "JSON and Other Sites" in the dictionary). You write it; put it in the
+  same private folder as `cl.secret` and `chmod 600` it. The built-in server
+  and the `.htaccess` above never send it. On nginx, add `keys` to the
+  `location` rule that refuses `.db` files.
+- `fetch` needs a `cl` built with libcurl, which the static build above leaves
+  out (a static libcurl drags in a TLS library and more). Build on the host
+  instead, adding `-DCL_CURL src/mod_curl.c -lcurl` to the command. Some shared
+  hosts block requests to other sites; ask yours.
 - Common escapes output and binds database parameters. It has no rate limiting
   except on email, so a public guestbook will collect spam.
 - Common refuses a form posted from another site (the browser's `Origin`

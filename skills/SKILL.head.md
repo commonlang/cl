@@ -102,6 +102,9 @@ cl words                              # every word, one form each
 | `header("Location: /x")` | `go to "/x"` |
 | `$_POST["x"]`, `request.form` | `form "x"` (POST) or `query "x"` (GET) |
 | `mail()` | `send email to "you@site.com"` block, see below |
+| `JSON.parse(t)`, `json.loads(t)` | `read json t` |
+| `JSON.stringify(x)`, `json.dumps(x)` | `json of x` |
+| `fetch(url)`, `requests.get(url)`, `curl` | `fetch "https://..."` (a JSON reply comes back as records and lists) |
 
 ## Verbs (your own commands)
 
@@ -147,8 +150,8 @@ show "[slug_of "Hello World"]"       # a verb that gives is used as a value
 
 ## Safety: what Common refuses, and the pattern to use
 
-Values that came from a visitor (`query`, `form`, `path`, `remembered`, and
-text read from a database) are marked, and stay marked through every word that
+Values that came from a visitor (`query`, `form`, `path`, `remembered`, text
+read from a database, and anything `fetch` brings back) are marked, and stay marked through every word that
 makes new text from them.
 
 - **Showing them is always safe.** They are HTML-escaped when shown or placed in
@@ -166,6 +169,10 @@ makes new text from them.
 - **send email to:** the recipient and `from:` must be addresses written in the
   code. A visitor's address goes in `reply to:`. Check it first with
   `if email is not an email`.
+- **fetch:** write the address in quotes right after `fetch`. A visitor's value
+  may only go after the host, `fetch "https://api.example.com/posts/[slug]"`,
+  and is encoded there. API keys go in `cl.keys` in the site's private folder
+  (`api.example.com Authorization: Bearer KEY`), never in a page.
 
 ## Databases
 
@@ -204,6 +211,32 @@ go to "/contact?thanks=yes"
 `subject:` and `body:` are required, `from:` is required unless `CL_MAIL_FROM`
 is set. The body is plain text. At most 3 emails per page run and 20 an hour.
 Not allowed inside `try`. See `examples/contact.html`.
+
+## JSON and other sites
+
+```
+set posts to fetch "https://api.example.com/posts"
+for each post in first 5 of posts
+  show "<li>[title of post]</li>"
+end
+set order to record
+  item: "lamp"
+  qty: 2
+end
+set reply to fetch "https://api.example.com/orders" with order
+show "Order [id of reply] is saved"
+```
+
+- A reply that says it is JSON becomes records and lists; anything else is
+  text. Go deeper one `of` at a time: `title of attributes of article`. A
+  column that is not one word: `item "field-image" of article`.
+- `read json TEXT` reads JSON from a form or a text. `json of VALUE` writes it;
+  answer a script's request with `show raw json of VALUE`.
+- JSON written inside quotes needs `\"` for its quotes and `\[ \]` for its
+  brackets, or they become holes: `read json "\[1, 2\]"`.
+- A reply that is not a success stops the page with an error that says why.
+  At most 20 fetches a page run, 10 seconds each. Not allowed inside `try`.
+  `fetch` needs the curl module: `cl words` lists `fetch` when the build has it.
 
 ## Examples in this skill
 

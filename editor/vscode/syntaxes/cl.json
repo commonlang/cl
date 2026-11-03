@@ -69,7 +69,7 @@
     },
     "keyword": {
       "name": "keyword.control.cl",
-      "match": "\\b(show|raw|set|to|add|if|otherwise|end|for|each|in|repeat|times|include|go|open|database|ask|tell|with|remember|as|forget|everything|send|email|an|yes|no|count|first|last|item|of|query|form|path|remembered|today|now|number|empty|list|uppercase|lowercase|trim|paragraphs|split|by|replace|hash|sort|reverse|date|year|month|day|is|not|more|less|than|at|least|most|and|or|contains|matches|page|text|dictionary|code|try|the|between|give|record|until)\\b"
+      "match": "\\b(show|raw|set|to|add|if|otherwise|end|for|each|in|repeat|times|include|go|open|database|ask|tell|with|remember|as|forget|everything|send|email|an|yes|no|count|first|last|item|of|query|form|path|remembered|today|now|number|empty|list|uppercase|lowercase|trim|paragraphs|split|by|replace|hash|sort|reverse|date|year|month|day|is|not|more|less|than|at|least|most|and|or|contains|matches|page|text|dictionary|code|try|the|between|give|record|until|read|json|fetch)\\b"
     },
     "number": {
       "name": "constant.numeric.cl",

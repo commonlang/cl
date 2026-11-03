@@ -272,3 +272,27 @@ age</cl>
 <cl>show 'x'</cl>
 <cl>set my_list to 1, 2
 show item 3 of my_list</cl>
+<p>json</p>
+<cl>set point to read json "{\"x\": 3, \"tags\": \[\"a\", \"b\"\], \"none\": null, \"ok\": false, \"say\": \"caf\\u00e9 \\\"hi\\\"\"}"
+show "[x of point] [tags of point] '[none of point]' [ok of point] [say of point]"
+show raw json of point
+set mine to record
+  name: "Ada <script>"
+  qty: 2.5
+  tags: "a", "b"
+end
+show raw json of mine
+show json of query "evil"
+set json to 1
+set read to 2
+show "[json] [read]"</cl>
+<cl>set x to read json "{'a': 1}"</cl>
+<cl>set x to read json "\[1,\]"</cl>
+<cl>set x to read json "{\"a\" 1}"</cl>
+<cl>set x to read json "\"a\\qb\""</cl>
+<cl>set x to read json "tru"</cl>
+<cl>set x to read json "1 2"</cl>
+<cl>set x to read json 5</cl>
+<cl>show read</cl>
+<cl>curl "https://example.com"</cl>
+<cl>set r to fetch</cl>

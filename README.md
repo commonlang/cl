@@ -37,7 +37,8 @@ Line 15: Common has no '>'. Write 'is more than'
 ## Try it
 
 Needs a C compiler. No other dependencies. SQLite support switches on by
-itself when SQLite is installed, which it is on macOS and most Linux systems. Works on macOS, Linux and Windows;
+itself when SQLite is installed, which it is on macOS and most Linux systems,
+and `fetch` (reading other sites and JSON APIs) when libcurl is. Works on macOS, Linux and Windows;
 see [docs/install.md](docs/install.md) for each platform.
 
 ```sh
@@ -122,7 +123,7 @@ you built. `AGENTS.md` in this repository is for agents working on Common itself
 
 ```
 src/cl.c          the interpreter and dev server: the language, in one file
-src/cl_module.h   the module interface; mod_sqlite.c and mod_postgres.c are the modules
+src/cl_module.h   the module interface; mod_sqlite.c, mod_postgres.c and mod_curl.c are the modules
 docs/             dictionary, design notes, install and deploy guides
 examples/         hello.html
 editor/vscode/    syntax highlighting for VS Code
@@ -137,6 +138,7 @@ loops, verbs of your own with give, records, text blocks for HTML, includes, GET
 SQLite or Postgres database (plain English outside, real SQL inside the quotes,
 parameters bound safely), sign-ins with signed cookies and hashed passwords,
 email from forms (`send email`, saved to `outbox/` while developing, sendmail when hosted),
+JSON (`read json`, `json of`) and other sites' APIs (`fetch`, keys kept in a private file),
 redirects, clean URLs, a custom 404 page, a dev server that forks per
 request, a CGI mode for real hosting, and a VS Code extension in
 `editor/vscode`. Strict vocabulary with helpful errors, automatic escaping.

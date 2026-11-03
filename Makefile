@@ -1,6 +1,6 @@
 # Common (cl) - build, test, install.
 #
-#   make            build ./cl  (SQLite support is added automatically when sqlite3.h is installed)
+#   make            build ./cl  (SQLite, Postgres and libcurl are added automatically when installed)
 #   make test       run the test suite
 #   make sanitize   build with AddressSanitizer + UBSan and run the tests
 #   make install    copy cl to /usr/local/bin (PREFIX to change)
@@ -40,15 +40,24 @@ ifeq ($(SQLITE_OK),yes)
   LDLIBS += -lsqlite3
 endif
 
+# Optional libcurl, for fetch: on if the compiler can see curl/curl.h and link -lcurl
+# (Debian: apt install libcurl4-openssl-dev; macOS has it).
+CURL_OK := $(shell echo 'int main(void){return 0;}' | $(CC) -x c -include curl/curl.h - -o /dev/null -lcurl 2>/dev/null && echo yes)
+ifeq ($(CURL_OK),yes)
+  CFLAGS += -DCL_CURL
+  SRC    += src/mod_curl.c
+  LDLIBS += -lcurl
+endif
+
 cl: $(SRC) src/cl_module.h
 	$(CC) $(CFLAGS) -o cl $(SRC) $(LDLIBS)
-	@echo "built cl (SQLite: $(if $(SQLITE_OK),yes,no), Postgres: $(if $(PG_OK),yes,no))"
+	@echo "built cl (SQLite: $(if $(SQLITE_OK),yes,no), Postgres: $(if $(PG_OK),yes,no), fetch: $(if $(CURL_OK),yes,no))"
 
 test: cl
 	sh tests/run.sh
 
 sanitize: $(SRC) src/cl_module.h
-	$(CC) -g -O1 -Wall -Wextra -std=c11 $(if $(SQLITE_OK),-DCL_SQLITE) $(if $(PG_OK),-DCL_POSTGRES -I$(PG_INC)) -fsanitize=address,undefined -fno-omit-frame-pointer -o cl $(SRC) $(LDLIBS)
+	$(CC) -g -O1 -Wall -Wextra -std=c11 $(if $(SQLITE_OK),-DCL_SQLITE) $(if $(PG_OK),-DCL_POSTGRES -I$(PG_INC)) $(if $(CURL_OK),-DCL_CURL) -fsanitize=address,undefined -fno-omit-frame-pointer -o cl $(SRC) $(LDLIBS)
 	sh tests/run.sh
 	$(MAKE) clean
 
