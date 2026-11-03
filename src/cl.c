@@ -12,9 +12,10 @@
  *   cl words [--markdown]                         every word of the language
  *   cl version
  *
- * Build: make (SQLite and Postgres are added when installed), or by hand:
- *   cc -O2 -o cl src/cl.c   (add -lws2_32 on Windows; no database words)
+ * Build: make (SQLite, Postgres and libcurl are added when installed), or by hand:
+ *   cc -O2 -o cl src/cl.c   (add -lws2_32 on Windows; no database words or fetch)
  *   cc -O2 -DCL_SQLITE -o cl src/cl.c src/mod_sqlite.c -lsqlite3
+ *   cc -O2 -DCL_CURL -o cl src/cl.c src/mod_curl.c -lcurl
  *
  * Libraries live in modules, src/mod_*.c, behind the small interface in
  * src/cl_module.h. This file is the language: it never includes a library.
@@ -29,9 +30,9 @@
  * [name]", are stored between HOLE_OPEN and HOLE_CLOSE and filled when used.
  *
  * Safety: values from a visitor (query, form, path, remembered, database
- * text) are marked untrusted, and text built from them tainted. They are
- * HTML-escaped when shown, and refused in SQL text, file names, off-site
- * go-to addresses and email recipients. Sessions are an HMAC-SHA256 signed
+ * text, another site's reply) are marked untrusted, and text built from them
+ * tainted. They are HTML-escaped when shown, and refused in SQL text, file
+ * names, off-site go-to addresses, email recipients and the host of a fetch. Sessions are an HMAC-SHA256 signed
  * cookie; passwords are PBKDF2-HMAC-SHA256.
  *
  * Errors are a longjmp (fail). Anything a frame holds across a fail is noted
@@ -53,7 +54,7 @@
 #include <sys/stat.h>
 #include <time.h>
 #include <stdint.h>
-#include "cl_module.h"      /* Value, and the interface the database modules are behind */
+#include "cl_module.h"      /* Value, and the interface the database and fetch modules are behind */
 
 /* ------------------------------------------------------------------ */
 /* Platform: the server needs sockets, which differ on Windows.        */
@@ -248,6 +249,9 @@ static const Word DICTIONARY[] = {
     { "replace", "replace \"a\" with \"b\" in TEXT", "the text with every a changed to b", "set slug to replace \" \" with \"-\" in title", 0 },
     { "ask", "ask database \"SQL\" with VALUE, ...", "run a query; each ? in the SQL takes the next value safely. Gives a list of records", "set posts to ask database \"select * from posts where slug = ?\" with slug", 0 },
     { "of", "COLUMN of RECORD", "one column of a record, like name of recipe. Any column name works", "show \"[title of recipe]\"", 0 },
+    { "read", "read json TEXT", "turn JSON text into lists and records, so 'COLUMN of RECORD' and 'for each' work on it. Text from a visitor or another site stays marked as theirs", "set point to read json \"{\\\"x\\\": 3, \\\"y\\\": 4}\"\nshow \"[x of point], [y of point]\"", 0 },
+    { "json", "json of VALUE", "a list, record, text or number written as JSON text, for an API or a script. Answer with it using show raw", "set point to record\n  x: 3\n  y: 4\nend\nshow raw json of point", 0 },
+    { "fetch", "fetch \"https://...\"  /  fetch \"https://...\" with RECORD", "read an address on the web. A JSON reply becomes lists and records, anything else text; both are marked as another site's. With a record, it is sent as JSON (a POST). A visitor's value may only go after the host. Keys go in the private cl.keys file, never in a page", "set posts to fetch \"https://api.example.com/posts\"\nfor each post in posts\n  show \"<li>[title of post]</li>\"\nend", 0 },
     /* conditions */
     { "is", "A is B", "equal. Also: is not, is more than, is less than, is at least, is at most, is between A and B, is empty", "if colour is \"blue\"\nif age is more than 12\nif name is empty", 0 },
     { "and", "A and B", "both must be yes", "if name is not empty and age is at least 18", 0 },
@@ -287,6 +291,8 @@ static const char *SYNONYMS[][2] = {
     { "sorted", "sort of" }, { "reversed", "reverse of" }, { "substr", "first N of" }, { "substring", "first N of" }, { "slice", "first N of" },
     { "mail", "send email" }, { "sendmail", "send email" }, { "smtp", "send email" },
     { "includes", "contains" }, { "in_array", "contains" }, { "strpos", "contains" }, { "strftime", "date of" },
+    { "json_decode", "read json" }, { "decode", "read json" }, { "json_encode", "json of" }, { "stringify", "json of" }, { "jsonify", "json of" },
+    { "curl", "fetch" }, { "wget", "fetch" }, { "request", "fetch" }, { "download", "fetch" },
 };
 #define NSYN (sizeof SYNONYMS / sizeof SYNONYMS[0])
 
@@ -294,7 +300,8 @@ static const char *SYNONYMS[][2] = {
    They may also be plain variable names, because the shape tells them apart. */
 static int is_soft_word(const char *w) {
     static const char *soft[] = { "count", "first", "last", "item", "number", "date", "year", "month", "day", "hash",
-                                  "sort", "reverse", "uppercase", "lowercase", "trim", "paragraphs", "split", "replace", "email", NULL };
+                                  "sort", "reverse", "uppercase", "lowercase", "trim", "paragraphs", "split", "replace", "email",
+                                  "json", "read", NULL };
     for (int i = 0; soft[i]; i++) if (strcmp(soft[i], w) == 0) return 1;
     return 0;
 }
@@ -405,17 +412,20 @@ static void print_words_markdown(void) {
 }
 
 static int db_available(void);
+static int fetch_available(void);
 static void print_modules(void);
 static void print_words(void) {
     printf("Common (CL) %s. One form each. Details: docs/dictionary.md\n\n", CL_VERSION);
-    int has_db = db_available();
+    int has_db = db_available(), has_fetch = fetch_available();
     for (size_t i = 0; i < NWORDS; i++) {
         const Word *w = &DICTIONARY[i];
         if (!w->form) continue;
         if (!has_db && (!strcmp(w->word, "open") || !strcmp(w->word, "ask") || !strcmp(w->word, "tell") || !strcmp(w->word, "of"))) continue;
+        if (!has_fetch && !strcmp(w->word, "fetch")) continue;
         printf("  %-28s %s\n", w->form, w->meaning);
     }
     if (!has_db) printf("  (database words are off: this build has no database module. Install SQLite and run make again)\n");
+    if (!has_fetch) printf("  (fetch is off: this build has no fetch module. Install libcurl and run make again)\n");
     printf("\nAlso: \"text in quotes with [values] inside\", + - * / ( ) for math, # for comments.\n");
     print_modules();
 }
@@ -509,7 +519,7 @@ static char *v_to_safe_text(const Value *v) {
         Buf *b = buf_new();
         for (int i = 0; i < v->count; i++) {
             if (i) buf_puts(b, ", ");
-            if (v->t == V_RECORD) { buf_puts(b, v->keys[i]); buf_puts(b, ": "); }
+            if (v->t == V_RECORD) { buf_puts_html(b, v->keys[i]); buf_puts(b, ": "); }   /* JSON from a visitor or another site chooses its keys */
             char *s = v_to_safe_text(&v->items[i]); buf_puts(b, s); free(s);
         }
         char *r = xstrdup(b->data); buf_free(b); return r;
@@ -1251,6 +1261,9 @@ static void modules_load(void) {
 #ifdef CL_POSTGRES
         cl_module_postgres,
 #endif
+#ifdef CL_CURL
+        cl_module_curl,
+#endif
         NULL
     };
     for (int i = 0; builtin[i]; i++) {
@@ -1344,9 +1357,12 @@ static void print_modules(void) {
     for (int i = 0; i < g_nmodules; i++) {
         const CLModule *m = g_modules[i];
         printf("  %-10s %s", m->name, m->library);
-        for (int c = 0; c < m->ncaps; c++) if (m->caps[c].kind == CL_CAP_DATABASE) {
-            const CLDatabase *d = m->caps[c].table;
-            printf(": open database \"%s\", %s", d->example, d->where);
+        for (int c = 0; c < m->ncaps; c++) {
+            if (m->caps[c].kind == CL_CAP_DATABASE) {
+                const CLDatabase *d = m->caps[c].table;
+                printf(": open database \"%s\", %s", d->example, d->where);
+            }
+            if (m->caps[c].kind == CL_CAP_FETCH) printf(": fetch \"https://...\", addresses on the web");
         }
         printf("\n");
     }
@@ -1392,6 +1408,222 @@ static void expr_enter(void) {
     if (++g_expr_depth > MAX_EXPR_DEPTH) { g_expr_depth = 0; fail("the line nests too deeply (more than %d brackets, holes or 'not's inside each other)", MAX_EXPR_DEPTH); }
     if (g_expr_depth > 8) stack_check();                       /* deep brackets: watch the stack itself too */
 }
+
+/* ------------------------------------------------------------------ */
+/* JSON: read json TEXT, json of VALUE                                 */
+/* ------------------------------------------------------------------ */
+
+/* JSON maps onto Common's values one to one: an object is a record, an array
+   a list, true and false are yes and no, null is empty text. The text is read
+   twice: once to check it, so an error leaves nothing half-built behind, and
+   once to build the values. */
+typedef struct { const char *s, *p, *what; int build, untrusted; size_t nodes, bytes; } Json;
+#define MAX_JSON_DEPTH 200
+
+__attribute__((noreturn)) static void json_fail(Json *j, const char *why) {
+    int line = 1, col = 1;
+    for (const char *q = j->s; q < j->p && *q; q++) {
+        if (*q == '\n') { line++; col = 1; }
+        else if (((unsigned char)*q & 0xC0) != 0x80) col++;       /* letters, not bytes */
+    }
+    fail("%s is not JSON: %s (line %d, letter %d)", j->what, why, line, col);
+}
+static void json_space(Json *j) { while (*j->p == ' ' || *j->p == '\t' || *j->p == '\n' || *j->p == '\r') j->p++; }
+
+static unsigned json_hex4(Json *j) {
+    unsigned v = 0;
+    for (int i = 0; i < 4; i++, j->p++) {
+        char c = *j->p;
+        if (!isxdigit((unsigned char)c)) json_fail(j, "\\u needs four hex digits, like \\u00e9");
+        v = v * 16 + (unsigned)(isdigit((unsigned char)c) ? c - '0' : tolower((unsigned char)c) - 'a' + 10);
+    }
+    return v;
+}
+static void json_utf8(Buf *b, unsigned cp) {
+    char u[4]; size_t n;
+    if (cp < 0x80)         { u[0] = (char)cp; n = 1; }
+    else if (cp < 0x800)   { u[0] = (char)(0xC0 | cp >> 6); u[1] = (char)(0x80 | (cp & 63)); n = 2; }
+    else if (cp < 0x10000) { u[0] = (char)(0xE0 | cp >> 12); u[1] = (char)(0x80 | (cp >> 6 & 63)); u[2] = (char)(0x80 | (cp & 63)); n = 3; }
+    else { u[0] = (char)(0xF0 | cp >> 18); u[1] = (char)(0x80 | (cp >> 12 & 63)); u[2] = (char)(0x80 | (cp >> 6 & 63)); u[3] = (char)(0x80 | (cp & 63)); n = 4; }
+    buf_putn(b, u, n);
+}
+
+/* A "text" at j->p, into b when building. */
+static void json_string(Json *j, Buf *b) {
+    j->p++;
+    for (;;) {
+        unsigned char c = (unsigned char)*j->p;
+        if (c == '"') { j->p++; return; }
+        if (c == 0) json_fail(j, "a text never ends: it needs a closing \"");
+        if (c < 0x20) json_fail(j, c == '\n' ? "a line break inside text must be written \\n" : "a control character inside text must be written \\u00XX");
+        j->bytes++;
+        if (c != '\\') { if (b) buf_putc(b, (char)c); j->p++; continue; }
+        j->p++;
+        char esc = *j->p++, out = 0;
+        switch (esc) {
+            case '"': case '\\': case '/': out = esc; break;
+            case 'b': out = '\b'; break;
+            case 'f': out = '\f'; break;
+            case 'n': out = '\n'; break;
+            case 'r': out = '\r'; break;
+            case 't': out = '\t'; break;
+            case 'u': {
+                unsigned cp = json_hex4(j);
+                if (cp >= 0xD800 && cp <= 0xDBFF) {                 /* an emoji is written as two halves */
+                    if (j->p[0] != '\\' || j->p[1] != 'u') json_fail(j, "\\uD800 to \\uDBFF is half a letter; the second half, \\uDC00 to \\uDFFF, must follow it");
+                    j->p += 2;
+                    unsigned lo = json_hex4(j);
+                    if (lo < 0xDC00 || lo > 0xDFFF) json_fail(j, "\\uD800 to \\uDBFF is half a letter; the second half, \\uDC00 to \\uDFFF, must follow it");
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                } else if (cp >= 0xDC00 && cp <= 0xDFFF) json_fail(j, "\\uDC00 to \\uDFFF is the second half of a letter, with no first half before it");
+                if (b && cp) json_utf8(b, cp);                      /* \u0000 is left out: Common text cannot hold it */
+                j->bytes += 3;
+                continue;
+            }
+            default: j->p -= 2; json_fail(j, "after \\ JSON only knows \\\" \\\\ \\/ \\b \\f \\n \\r \\t and \\uXXXX");
+        }
+        if (b) buf_putc(b, out);
+    }
+}
+
+static Value json_value(Json *j, int depth) {
+    if (depth > MAX_JSON_DEPTH) json_fail(j, "more than 200 lists or records inside each other");
+    if (depth > 8) stack_check();
+    json_space(j);
+    j->nodes++;
+    char c = *j->p;
+    if (c == '{' || c == '[') {
+        int rec = c == '{'; char close = rec ? '}' : ']';
+        Value r = !j->build ? v_bool(0) : rec ? v_record() : v_list();
+        r.untrusted = j->untrusted;                    /* the keys too: text made from the record stays marked */
+        j->p++; json_space(j);
+        if (*j->p == close) { j->p++; return r; }
+        for (;;) {
+            json_space(j);
+            Buf *key = NULL;
+            if (rec) {
+                if (*j->p != '"') json_fail(j, *j->p == '\'' ? "names go in double quotes, not single ones" : *j->p == '}' ? "the comma before } has nothing after it" : "expected a name in double quotes");
+                if (j->build) key = buf_new();
+                json_string(j, key);
+                json_space(j);
+                if (*j->p != ':') json_fail(j, "expected : after the name");
+                j->p++; json_space(j);
+            } else if (*j->p == ']') json_fail(j, "the comma before ] has nothing after it");
+            Value v = json_value(j, depth + 1);
+            if (j->build) {
+                if (rec) { record_add(&r, key->data, v); buf_free(key); }
+                else list_add(&r, v);
+            }
+            json_space(j);
+            if (*j->p == ',') { j->p++; continue; }
+            if (*j->p == close) { j->p++; return r; }
+            json_fail(j, rec ? "expected , or } after a value in a record" : "expected , or ] after a value in a list");
+        }
+    }
+    if (c == '"') {
+        Buf *b = j->build ? buf_new() : NULL;
+        json_string(j, b);
+        if (!b) return v_bool(0);
+        Value v = v_text(b->data); v.untrusted = j->untrusted; buf_free(b);
+        return v;
+    }
+    if (c == '-' || isdigit((unsigned char)c)) {
+        const char *q = j->p;
+        if (*q == '-') q++;
+        if (*q == '0') q++;
+        else if (isdigit((unsigned char)*q)) while (isdigit((unsigned char)*q)) q++;
+        else { j->p = q; json_fail(j, "a number needs digits after the -"); }
+        if (*q == '.') { q++; if (!isdigit((unsigned char)*q)) { j->p = q; json_fail(j, "a number needs digits after the ."); } while (isdigit((unsigned char)*q)) q++; }
+        if (*q == 'e' || *q == 'E') {
+            q++; if (*q == '+' || *q == '-') q++;
+            if (!isdigit((unsigned char)*q)) { j->p = q; json_fail(j, "a number needs digits after the e"); }
+            while (isdigit((unsigned char)*q)) q++;
+        }
+        double d = strtod(j->p, NULL);
+        if (d != d || d - d != 0) json_fail(j, "the number is too big");
+        j->p = q;
+        return v_num(d);
+    }
+    static const char *names[] = { "true", "false", "null" };
+    for (int i = 0; i < 3; i++) {
+        size_t n = strlen(names[i]);
+        if (!strncmp(j->p, names[i], n) && !isalnum((unsigned char)j->p[n])) {
+            j->p += n;
+            return i < 2 ? v_bool(i == 0) : j->build ? v_text("") : v_bool(0);
+        }
+    }
+    if (!c) json_fail(j, "it ends where a value should be");
+    if (c == '\'') json_fail(j, "text goes in double quotes, not single ones");
+    json_fail(j, "expected a value: text in double quotes, a number, true, false, null, [ or {");
+}
+
+/* JSON text as values. untrusted: the text came from a visitor or another
+   site, so the text values in it are marked the same way. what: names the
+   text in errors, like "the text given to 'read json'". */
+static Value json_read(const char *text, int untrusted, const char *what) {
+    Json j = { text, text, what, 0, untrusted, 0, 0 };
+    if (!strncmp(j.p, "\xEF\xBB\xBF", 3)) j.p += 3;            /* a byte order mark, which some editors add */
+    const char *start = j.p;
+    json_space(&j);
+    if (!*j.p) json_fail(&j, "it is empty");
+    json_value(&j, 0);
+    json_space(&j);
+    if (*j.p) json_fail(&j, "there is more after the end of the value");
+    /* Practice code pays for the values up front, so building never stops half-way. */
+    budget(j.nodes * 2 * (sizeof(Value) + sizeof(char *)) + j.bytes * 2);
+    int budget_on = g_budget_on; g_budget_on = 0;
+    j.p = start; j.build = 1;
+    Value v = json_value(&j, 0);
+    g_budget_on = budget_on;
+    return v;
+}
+
+/* Text as a JSON string. < > & and the two line separators JavaScript cannot
+   take are written as \u escapes, so the JSON is safe inside a <script> too. */
+static void json_quote(Buf *b, const char *s) {
+    buf_putc(b, '"');
+    for (const unsigned char *p = (const unsigned char *)s; *p; p++) {
+        char t[8];
+        switch (*p) {
+            case '"':  buf_puts(b, "\\\""); break;
+            case '\\': buf_puts(b, "\\\\"); break;
+            case '\n': buf_puts(b, "\\n"); break;
+            case '\r': buf_puts(b, "\\r"); break;
+            case '\t': buf_puts(b, "\\t"); break;
+            case '<': case '>': case '&': snprintf(t, sizeof t, "\\u%04x", *p); buf_puts(b, t); break;
+            default:
+                if (*p < 0x20) { snprintf(t, sizeof t, "\\u%04x", *p); buf_puts(b, t); }
+                else if (p[0] == 0xE2 && p[1] == 0x80 && (p[2] == 0xA8 || p[2] == 0xA9)) { buf_puts(b, p[2] == 0xA8 ? "\\u2028" : "\\u2029"); p += 2; }
+                else buf_putc(b, (char)*p);
+        }
+    }
+    buf_putc(b, '"');
+}
+
+/* A value as JSON. Text joined with a visitor's value goes as plain text, as
+   it does into a database or an email, so it is not escaped twice. */
+static void json_write(Buf *b, const Value *v) {
+    stack_check();
+    char *t;
+    switch (v->t) {
+        case V_NUM:
+            if (v->n != v->n || v->n - v->n != 0) buf_puts(b, "null");      /* JSON has no infinity */
+            else { char n[64]; snprintf(n, sizeof n, "%.15g", v->n); buf_puts(b, n); }
+            break;
+        case V_BOOL: buf_puts(b, v->n ? "true" : "false"); break;
+        case V_TEXT: t = plain_text(v); json_quote(b, t); free(t); break;
+        case V_LIST: case V_RECORD:
+            buf_putc(b, v->t == V_LIST ? '[' : '{');
+            for (int i = 0; i < v->count; i++) {
+                if (i) buf_putc(b, ',');
+                if (v->t == V_RECORD) { json_quote(b, v->keys[i]); buf_putc(b, ':'); }
+                json_write(b, &v->items[i]);
+            }
+            buf_putc(b, v->t == V_LIST ? ']' : '}');
+            break;
+    }
+}
+
 static Value parse_add(Env *e, Toks *T);
 
 /* Parse the optional "with VALUE, VALUE" after a database command. Each value
@@ -1464,9 +1696,24 @@ static void hole_tokens(const char *src, size_t len, Toks *U) {
     U->cap = -1;
 }
 
+/* A hole in the address after 'fetch'. The page's own values go in as they
+   are. A visitor's value may only fill the path or the query, after the host,
+   and is percent-encoded there, so it can never change the site the request
+   goes to, or add a /, ? or & of its own. */
+static void url_hole(Buf *b, const Value *v) {
+    if (!v->untrusted && !v->tainted) { char *s = v_to_text(v); buf_puts(b, s); free(s); return; }
+    const char *scheme = strstr(b->data, "://");
+    if (!scheme || !strchr(scheme + 3, '/'))
+        fail("a visitor's value may only go after the host in a fetch address, like fetch \"https://api.example.com/posts/[slug]\". Otherwise a visitor could choose the site the request goes to");
+    char *s = plain_text(v); url_encode(s, b); free(s);
+}
+
 /* Text with holes: "Hello [name]". Each hole is evaluated as a value and
-   placed into the text, made safe if it came from the visitor. */
-static Value fill_text(Env *e, const char *t) {
+   placed into the text, made safe if it came from the visitor. url: the
+   address after 'fetch', filled by url_hole instead. */
+static Value fill_holes(Env *e, const char *t, int url);
+static Value fill_text(Env *e, const char *t) { return fill_holes(e, t, 0); }
+static Value fill_holes(Env *e, const char *t, int url) {
     if (!strchr(t, HOLE_OPEN)) return v_text(t);
     Buf *b = buf_new(); int tainted = 0;
     if (g_nbufs < 64) g_bufs[g_nbufs++] = b;
@@ -1484,6 +1731,11 @@ static Value fill_text(Env *e, const char *t) {
         held_push(v);
         if (!at_end(&U)) fail("unexpected '%s' inside the brackets", U.t[U.pos].text ? U.t[U.pos].text : "number");
         if (v.untrusted || v.tainted) tainted = 1;
+        if (url) {
+            url_hole(b, &v);
+            held_pop(); v_free(&v); if (owned) { U.cap = 0; toks_free(&U); }
+            p = end + 1; continue;
+        }
         /* Both the value and its text stay held until they are in the buffer:
            growing the text can hit the memory limit of practice code. */
         char *s = e->plain_holes ? v_to_text(&v) : v_to_safe_text(&v);
@@ -1497,9 +1749,10 @@ static Value fill_text(Env *e, const char *t) {
         p = end + 1;
     }
     if (g_nbufs > 0 && g_bufs[g_nbufs - 1] == b) g_nbufs--;
-    Value v = v_text(b->data); buf_free(b); v.tainted = tainted;
+    Value v = v_text(b->data); buf_free(b); v.tainted = url ? 0 : tainted;   /* url: visitor values are encoded, see url_hole */
     return v;
 }
+static Value parse_fetch(Env *e, Toks *T);
 
 /* One column of a record. Frees the record. */
 static Value record_field(Value *r, const char *field) {
@@ -1736,6 +1989,35 @@ static Value parse_primary_inner(Env *e, Toks *T) {
         v_free(&sql); v_free(&params);
         return rows;
     }
+
+    /* read json TEXT */
+    if (at_word(T, "read") && T->pos + 1 < T->n && T->t[T->pos+1].t == T_WORD && !strcmp(T->t[T->pos+1].text, "json")) {
+        T->pos += 2;
+        Value v = parse_primary(e, T);
+        if (v.t != V_TEXT) { held_push(v); fail("'read json' needs JSON text, like form \"order\" or a text you wrote, not %s", type_name(v.t)); }
+        int u = 0, t = 0; v_taint_of(&v, &u, &t);
+        Value plain = { V_TEXT, plain_text(&v), 0, NULL, NULL, 0, 0, 0, 0 };   /* held: the JSON can be wrong */
+        v_free(&v); held_push(plain);
+        Value r = json_read(plain.s, u || t, "the text given to 'read json'");
+        held_pop(); v_free(&plain);
+        return r;
+    }
+    /* json of VALUE. Not a column: a record is what it writes most often. */
+    if (at_word(T, "json") && NEXT_IS_OF) {
+        T->pos += 2;
+        Value v = parse_primary(e, T); held_push(v);
+        Buf *b = buf_new();
+        if (g_nbufs < 64) g_bufs[g_nbufs++] = b;
+        json_write(b, &v);
+        if (g_nbufs > 0 && g_bufs[g_nbufs - 1] == b) g_nbufs--;
+        Value r = v_text(b->data); buf_free(b);
+        int u = 0, t = 0; v_taint_of(&v, &u, &t);
+        r.untrusted = u || t;                  /* shown on a page, a visitor's text in it is escaped like any other */
+        held_pop(); v_free(&v);
+        return r;
+    }
+    /* fetch "https://..." [with VALUE] */
+    if (accept_word(T, "fetch")) return parse_fetch(e, T);
 
     /* form "field": submitted form data, untrusted like query */
     if (at_word(T, "form") && !(T->pos + 1 < T->n && T->t[T->pos+1].t == T_WORD && strcmp(T->t[T->pos+1].text, "of") == 0)) {
@@ -2130,6 +2412,140 @@ static Value parse_expr(Env *e, Toks *T) {
     }
     g_expr_depth--;
     return left;
+}
+
+/* ------------------------------------------------------------------ */
+/* Fetching: the word is here, the requests go through a module.        */
+/* ------------------------------------------------------------------ */
+
+static int fetch_available(void) { return capability(CL_CAP_FETCH, 0) != NULL; }
+static int ci_starts(const char *s, const char *prefix);
+
+static int g_fetches;           /* requests made by this page run */
+#define FETCH_PER_PAGE  20
+#define FETCH_SECONDS   10
+#define FETCH_MAX_BYTES ((size_t)10 << 20)
+#define FETCH_MAX_KEYS  8
+
+/* The host of an address the core already checked starts with http(s)://,
+   lowercase, without a user:password@ or a :port. */
+static void url_host(const char *url, char *out, size_t n) {
+    const char *h = strstr(url, "://") + 3, *e = h;
+    while (*e && *e != '/' && *e != '?' && *e != '#') e++;
+    for (const char *at = h; at < e; at++) if (*at == '@') h = at + 1;
+    const char *colon = h; while (colon < e && *colon != ':') colon++;
+    if (*h == '[') { colon = h; while (colon < e && *colon != ']') colon++; if (colon < e) colon++; }   /* [::1]:8000 */
+    size_t len = (size_t)(colon - h); if (len >= n) len = n - 1;
+    for (size_t i = 0; i < len; i++) out[i] = (char)tolower((unsigned char)h[i]);
+    out[len] = 0;
+}
+
+/* The address for an error: no query, where a key might be, and not too long. */
+static void url_shown(const char *url, char *out, size_t n) {
+    size_t len = strcspn(url, "?#");
+    snprintf(out, n, "%.*s%s", len > 100 ? 100 : (int)len, url, len > 100 || url[len] ? "..." : "");
+}
+
+/* Header lines for a host, from cl.keys in the site's private folder:
+       api.example.com  Authorization: Bearer abc123
+   A key is only ever sent to the host written before it, so it never appears
+   in a page, an error or a request to any other site. */
+static int fetch_keys(const char *dir, const char *host, char keys[][1024], int max) {
+    char path[4096]; snprintf(path, sizeof path, "%s/cl.keys", private_base(dir));
+    FILE *f = fopen(path, "r"); if (!f) return 0;
+    int n = 0; char line[1400];
+    while (n < max && fgets(line, sizeof line, f)) {
+        char *s = line; while (isspace((unsigned char)*s)) s++;
+        if (!*s || *s == '#') continue;
+        char *sp = s; while (*sp && !isspace((unsigned char)*sp)) sp++;
+        if (!*sp) continue;
+        *sp = 0;
+        char *hdr = sp + 1; while (isspace((unsigned char)*hdr)) hdr++;
+        size_t len = strlen(hdr); while (len && isspace((unsigned char)hdr[len-1])) hdr[--len] = 0;
+        lowercase(s, s, strlen(s) + 1);
+        const char *colon = strchr(hdr, ':');
+        if (strcmp(s, host) || !colon || colon == hdr || len >= 1024) continue;
+        snprintf(keys[n++], 1024, "%s", hdr);
+    }
+    fclose(f);
+    return n;
+}
+
+/* A reply that is not 2xx, as an error that says what to do about it. */
+static void fetch_status_fail(long status, const char *shown, const char *host) {
+    if (status == 401 || status == 403)
+        fail("%s answered %ld: it wants a key, or this key may not read it. Put the key in cl.keys in the site's private folder, one line per host, like: %s Authorization: Bearer YOUR_KEY", shown, status, host);
+    if (status == 404) fail("%s answered 404: there is nothing at that address. Check it in a browser", shown);
+    if (status == 429) fail("%s answered 429: too many requests. Wait a little, and fetch less often", shown);
+    if (status >= 500) fail("%s answered %ld: the server there has a problem. Try again later", shown, status);
+    if (status >= 300 && status < 400) fail("%s answered %ld: it moved. Fetch the new address instead", shown, status);
+    fail("%s answered %ld", shown, status);
+}
+
+static NOINLINE Value fetch_url(Env *e, const char *url, const Value *send) {
+    const CLFetch *f = capability(CL_CAP_FETCH, 0);
+    if (!f) fail("this build of Common cannot fetch: it has no fetch module. Install libcurl (Debian: apt install libcurl4-openssl-dev) and run make again");
+    if (!ci_starts(url, "https://") && !ci_starts(url, "http://"))
+        fail("'fetch' needs an address that starts with https:// or http://, like fetch \"https://api.example.com/posts\"");
+    for (const unsigned char *c = (const unsigned char *)url; *c; c++)
+        if (*c <= ' ' || *c == 0x7f || *c == '\\' || *c == '"' || *c == '<' || *c == '>')
+            fail("the fetch address has a space or a character that cannot be in an address. Put values in it in brackets, like \"https://api.example.com/search?q=[words]\", and they are encoded");
+    char host[256]; url_host(url, host, sizeof host);
+    if (!host[0]) fail("the fetch address has no host after the //, like \"https://api.example.com/posts\"");
+    char shown[160]; url_shown(url, shown, sizeof shown);
+    if (++g_fetches > FETCH_PER_PAGE) fail("a page can fetch at most %d addresses each time it runs", FETCH_PER_PAGE);
+
+    char keys[FETCH_MAX_KEYS][1024]; const char *hdrs[FETCH_MAX_KEYS];
+    int nkeys = fetch_keys(e->dir, host, keys, FETCH_MAX_KEYS);
+    for (int i = 0; i < nkeys; i++) hdrs[i] = keys[i];
+
+    Value body = { V_TEXT, NULL, 0, NULL, NULL, 0, 0, 0, 0 };
+    if (send) {
+        if (send->t != V_RECORD && send->t != V_LIST) fail("'fetch ... with' sends a record or a list as JSON, not %s. Make one with: set order to record", type_name(send->t));
+        Buf *b = buf_new(); json_write(b, send); body.s = xstrdup(b->data); buf_free(b);
+        held_push(body);                                     /* freed by run_block if the module fails */
+    }
+    CLFetchRequest rq = { url, host, body.s, hdrs, nkeys, FETCH_SECONDS, FETCH_MAX_BYTES };
+    CLFetchReply rp; memset(&rp, 0, sizeof rp);
+    f->fetch(&g_host, &rq, &rp);
+    if (send) { held_pop(); free(body.s); }
+
+    long status = rp.status;
+    if (status < 200 || status > 299) { f->free_reply(&rp); fetch_status_fail(status, shown, host); }
+    if (rp.body && memchr(rp.body, 0, rp.len)) { f->free_reply(&rp); fail("%s did not answer with text (an image or a file?). 'fetch' reads JSON and text", shown); }
+    char ct[128] = ""; if (rp.content_type) lowercase(rp.content_type, ct, sizeof ct);
+    Value text = v_untrusted_text(rp.body ? rp.body : "");    /* another site wrote it: escaped when shown */
+    f->free_reply(&rp);
+    if (!strstr(ct, "json") || !text.s[0]) return text;      /* an empty reply, like 204 No Content, is empty text */
+    char what[300]; snprintf(what, sizeof what, "the reply from %s", host);
+    held_push(text);
+    Value r = json_read(text.s, 1, what);
+    held_pop(); v_free(&text);
+    return r;
+}
+
+/* fetch "https://..." [with VALUE]. The address is written in the page, so the
+   page chooses the site; a visitor's value may fill the rest (see url_hole). */
+static Value parse_fetch(Env *e, Toks *T) {
+    if (e->sandbox) fail("'fetch' is not allowed in practice code. Everything else is");
+    if (at_end(T)) fail("'fetch' needs an address in quotes: fetch \"https://api.example.com/posts\"");
+    Value url;
+    if (T->t[T->pos].t == T_STR) url = fill_holes(e, T->t[T->pos++].text, 1);
+    else {
+        url = parse_primary(e, T);
+        if (url.untrusted || url.tainted) {
+            held_push(url);
+            fail("'fetch' cannot take an address that came from a visitor, or a visitor could choose the site. Write the address in quotes right after fetch; a visitor's value may go after the host: fetch \"https://api.example.com/posts/[slug]\"");
+        }
+    }
+    held_push(url);
+    if (url.t != V_TEXT) fail("'fetch' needs an address in quotes, not %s", type_name(url.t));
+    Value send = { V_BOOL, NULL, 0, NULL, NULL, 0, 0, 0, 0 }; int has_send = 0;
+    if (accept_word(T, "with")) { send = parse_add(e, T); has_send = 1; held_push(send); }
+    Value r = fetch_url(e, url.s, has_send ? &send : NULL);
+    if (has_send) { held_pop(); v_free(&send); }
+    held_pop(); v_free(&url);
+    return r;
 }
 
 /* ================================================================== */
@@ -3137,7 +3553,7 @@ static void plain(Response *r, const char *status, const char *text) {
    and Windows ignores dots and spaces at the end of a name, so cl.SECRET and
    site.db. are the same files: compare the way the file system does. */
 static int is_private(const char *path) {
-    static const char *ends[] = { ".db", ".sqlite", ".sqlite3", ".sql", ".secret", ".eml", ".log", "/outbox", NULL };
+    static const char *ends[] = { ".db", ".sqlite", ".sqlite3", ".sql", ".secret", ".keys", ".eml", ".log", "/outbox", NULL };
     static const char *inside[] = { ".db-journal", ".db-wal", ".db-shm", NULL };
     char lc[8192]; lowercase(path, lc, sizeof lc);
     size_t n = strlen(lc); while (n && (lc[n-1] == '.' || lc[n-1] == ' ' || lc[n-1] == '/' || lc[n-1] == '\\')) lc[--n] = 0;

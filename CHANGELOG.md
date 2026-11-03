@@ -4,6 +4,23 @@ Changes go under **Unreleased** as they are made. `make release VERSION=X.Y.Z` t
 
 ## Unreleased
 
+- New: `read json TEXT` turns JSON into lists and records, and `json of VALUE`
+  writes any value as JSON (with `<`, `>` and `&` escaped, so it is safe in a
+  `<script>`). JSON from a visitor stays marked as a visitor's. Both are in the
+  core and need no library.
+- New: `fetch "https://..."` reads an address on the web, and
+  `fetch "https://..." with RECORD` sends a record as JSON (a POST). A JSON
+  reply becomes records and lists, anything else text, and both are escaped
+  when shown like a visitor's text. The page always chooses the site: a
+  visitor's value may only go after the host, where it is encoded. Keys for an
+  API go in `cl.keys` in the site's private folder, one line per host, and are
+  only sent to that host. At most 20 fetches a page, 10 seconds and 10 MB
+  each; not allowed in `try`. It needs libcurl, in the new module
+  `src/mod_curl.c`, which `make` adds when libcurl is installed.
+- The module interface is now version 2 (`CL_MODULE_API`): it adds the fetch
+  capability. Modules built for version 1 must be rebuilt.
+- The built-in server and the `.htaccess` in `docs/deploy.md` never send
+  `.keys` files.
 - The SQLite and Postgres drivers are now modules, `src/mod_sqlite.c` and
   `src/mod_postgres.c`, behind the small interface in `src/cl_module.h`; the
   interpreter itself no longer includes either library, and `docs/modules.md`

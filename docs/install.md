@@ -64,6 +64,14 @@ Tested on Apple Silicon. Intel Macs use the same steps but have not been tested 
    apk add build-base git
    ```
 
+   Optional: SQLite for the database words and libcurl for `fetch`. `make`
+   picks up whichever is installed.
+
+   ```sh
+   sudo apt install libsqlite3-dev libcurl4-openssl-dev   # Debian, Ubuntu, Mint
+   sudo dnf install sqlite-devel libcurl-devel            # Fedora
+   ```
+
 2. Build and install:
 
    ```sh
@@ -140,12 +148,15 @@ Any C11 compiler works:
 ```sh
 cc -O2 -o cl src/cl.c                                          # macOS, Linux, BSD: no database words
 cc -O2 -DCL_SQLITE -o cl src/cl.c src/mod_sqlite.c -lsqlite3    # the same, with SQLite
+cc -O2 -DCL_CURL -o cl src/cl.c src/mod_curl.c -lcurl            # the same, with fetch
 gcc -O2 -o common.exe src/cl.c -lws2_32                        # Windows, MinGW
 ```
 
-Each database is a module in `src/`: `mod_sqlite.c` needs `-DCL_SQLITE` and
-`-lsqlite3`, `mod_postgres.c` needs `-DCL_POSTGRES` and `-lpq`. `make` works
-this out from what is installed.
+Each library is a module in `src/`: `mod_sqlite.c` needs `-DCL_SQLITE` and
+`-lsqlite3`, `mod_postgres.c` needs `-DCL_POSTGRES` and `-lpq`, `mod_curl.c`
+(for `fetch`) needs `-DCL_CURL` and `-lcurl`. `make` works this out from what
+is installed. macOS has libcurl; on Debian and Ubuntu,
+`apt install libcurl4-openssl-dev`.
 
 ---
 

@@ -591,6 +591,96 @@ printf '<cl>include "/../x.html"</cl>' > $t/shop/b.html
 ./cl $t/shop/b.html | grep -q "never a path with .."                || fail "include refuses .. after a leading / too"
 rm -rf $t
 
+# 3s. JSON: read json and json of. A visitor's JSON stays a visitor's, and json of is safe in a <script>
+t=$(mktemp -d)
+printf '<cl>set v to read json form "data"\nshow "[name of v] [count of tags of v] [ok of v] [n of v]"\nshow raw json of v\nshow json of v</cl>' > $t/a.html
+out=$(./cl $t/a.html "" 'data=%7B%22name%22%3A%22%3Cb%3EEve%22%2C%22tags%22%3A%5B1%2C2%5D%2C%22ok%22%3Atrue%2C%22n%22%3A-1.5e2%7D')
+echo "$out" | sed -n 1p | grep -qx '&lt;b&gt;Eve 2 yes -150'                       || fail "read json: a visitor's text is escaped, numbers and yes/no are values"
+echo "$out" | sed -n 2p | grep -qx '{"name":"\\u003cb\\u003eEve","tags":\[1,2\],"ok":true,"n":-150}' || fail "json of writes < > as \\u escapes"
+echo "$out" | sed -n 3p | grep -q '^{&quot;name&quot;'                              || fail "json of a visitor's values is escaped when shown"
+printf '<cl>set v to read json form "data"</cl>' > $t/b.html
+./cl $t/b.html "" 'data=%7B%22a%22%3A%5B' | grep -q "is not JSON: it ends where a value should be (line 1, letter 7)" || fail "read json: a cut-off text says where"
+./cl $t/b.html "" "data=$(python3 -c 'print("%5B" * 300)')" | grep -q "more than 200 lists or records inside each other" || fail "read json: deep nesting is an error, not a crash"
+printf '<cl>set v to read json form "data"\nshow v\nshow "[v]"\nshow uppercase of v</cl>' > $t/k.html
+./cl $t/k.html "" 'data=%7B%22%3Cs%3E%22%3A1%7D' | grep -q '<s>\|<S>'               && fail "read json: a visitor's keys are escaped too"
+./cl $t/b.html "" "data=%22%5Cud83d%22" | grep -q "half a letter"                 || fail "read json: half an emoji is an error"
+./cl $t/b.html "" "data=%22%5Cud83d%5Cude00%22" | grep -q "Common error"          && fail "read json: an emoji in two halves reads"
+cat > $t/c.html <<'CL'
+<cl>show try "set v to read json \"\\\[1, 2, 3\\\]\"\nshow count of v"</cl>
+CL
+[ "$(./cl $t/c.html)" = "3" ]                                                      || fail "read json works in practice code"
+rm -rf $t
+
+# 3t. fetch, when this build has the fetch module: the page picks the site, a visitor's value
+# is encoded after the host, keys stay with their host, and the reply is another site's text
+if ./cl words | grep -q '^  fetch'; then
+  t=$(mktemp -d); port=$((20000 + ($$ + 47) % 10000))
+  cat > $t/api.py <<'PY'
+import json, sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+class H(BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def reply(self, code, body, ctype="application/json"):
+        b = body.encode()
+        self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(b))); self.end_headers(); self.wfile.write(b)
+    def do_GET(self):
+        p = self.path.split("?")[0]
+        if p == "/posts": self.reply(200, json.dumps({"data": [{"attributes": {"title": "Hello <b>world</b>"}}, {"attributes": {"title": "Second"}}]}), "application/vnd.api+json")
+        elif p == "/text": self.reply(200, "plain <i>text</i>", "text/plain")
+        elif p == "/bad": self.reply(200, "{nope")
+        elif p == "/empty": self.reply(204, "")
+        elif p == "/secret": self.reply(401, "{}")
+        elif p == "/moved": self.send_response(302); self.send_header("Location", "/posts"); self.send_header("Content-Length", "0"); self.end_headers()
+        else: self.do_POST()
+    def do_POST(self):
+        n = int(self.headers.get("Content-Length", 0))
+        self.reply(200, json.dumps({"method": self.command, "path": self.path, "auth": self.headers.get("Authorization", ""), "type": self.headers.get("Content-Type", ""), "body": self.rfile.read(n).decode()}))
+HTTPServer(("127.0.0.1", int(sys.argv[1])), H).serve_forever()
+PY
+  (python3 -I $t/api.py $port >/dev/null 2>&1 &)
+  i=0; until curl -s -o /dev/null "http://127.0.0.1:$port/x" || [ $i -ge 100 ]; do sleep 0.1; i=$((i + 1)); done
+  a="http://127.0.0.1:$port"
+  printf '<cl>set posts to fetch "%s/posts"\nfor each post in data of posts\n  show "<li>[title of attributes of post]</li>"\nend\nshow fetch "%s/text"</cl>' $a $a > $t/a.html
+  [ "$(./cl $t/a.html | tr -d '\n')" = "<li>Hello &lt;b&gt;world&lt;/b&gt;</li><li>Second</li>plain &lt;i&gt;text&lt;/i&gt;" ] || fail "fetch: JSON becomes records, text stays text, both escaped"
+  printf '<cl>set r to fetch "%s/item/[query "slug"]?q=[query "q"]"\nshow "[path of r] [auth of r]"</cl>' $a > $t/b.html
+  [ "$(./cl $t/b.html 'slug=a%2F..%2Fb%3Fc%26d&q=x%20y')" = "/item/a%2F..%2Fb%3Fc%26d?q=x%20y " ] || fail "fetch: a visitor's value is encoded after the host"
+  printf '127.0.0.1 Authorization: Bearer s3cret\n' > $t/cl.keys
+  [ "$(./cl $t/b.html 'slug=x')" = "/item/x?q= Bearer s3cret" ]                    || fail "fetch: cl.keys adds the key for its host"
+  printf '<cl>set r to fetch "http://localhost:%s/x"\nshow raw r</cl>' $port > $t/c.html
+  ./cl $t/c.html | grep -q s3cret                                                   && fail "fetch: a key is never sent to another host"
+  printf '<cl>set order to record\n  note: form "note"\n  qty: 2\nend\nset r to fetch "%s/orders" with order\nshow "[method of r] [type of r] "\nshow raw body of r</cl>' $a > $t/d.html
+  [ "$(./cl $t/d.html '' 'note=%3Cb%3Ehi' | tr -d '\n')" = 'POST application/json {"note":"\u003cb\u003ehi","qty":2}' ] || fail "fetch with a record posts it as JSON"
+  printf '<cl>show "[fetch "%s/empty"]."</cl>' $a > $t/e.html
+  [ "$(./cl $t/e.html)" = "." ]                                                     || fail "fetch: an empty reply is empty text"
+  rm $t/cl.keys
+  printf '<cl>set r to fetch "%s/moved"\nshow "[count of data of r]"</cl>' $a > $t/f.html
+  [ "$(./cl $t/f.html)" = "2" ]                                                     || fail "fetch follows a redirect when there is no key"
+  for c in 'fetch "http://[query "h"]/x"|may only go after the host' "fetch \"$a[query \"h\"]\"|may only go after the host" \
+           'fetch query "h"|came from a visitor' 'fetch "ftp://127.0.0.1/x"|starts with https:// or http://' \
+           "fetch \"$a/a b\"|cannot be in an address" "fetch \"$a/bad\"|the reply from 127.0.0.1 is not JSON" \
+           "fetch \"$a/x\" with 5|sends a record or a list" \
+           'fetch "http://127.0.0.1:1/x"|did not take the connection' 'fetch "http"|starts with https:// or http://'; do
+    printf '<cl>set r to %s</cl>' "${c%%|*}" > $t/g.html
+    ./cl $t/g.html 'h=evil.example' | grep -q "${c#*|}"                            || fail "fetch error: ${c%%|*}"
+  done
+  printf '<cl>set r to fetch "%s/secret?key=hidden"</cl>' $a > $t/g.html
+  ./cl $t/g.html | grep -q 'answered 401: it wants a key'                          || fail "fetch error: 401 asks for a key"
+  ./cl $t/g.html | grep -q 'key=hidden'                                             && fail "fetch errors never show the query, where a key may be"
+  printf '<cl>show try "set r to fetch \\"%s/x\\""</cl>' $a > $t/h.html
+  ./cl $t/h.html | grep -q "not allowed in practice code"                          || fail "fetch is not allowed in practice code"
+  printf '<cl>repeat 21 times\n  set r to fetch "%s/x"\nend</cl>' $a > $t/i.html
+  ./cl $t/i.html | grep -q "at most 20 addresses"                                  || fail "fetch: at most 20 requests a page"
+  pkill -f "api.py $port"
+  # the server never sends cl.keys
+  printf 'x Authorization: k\n' > $t/cl.keys; port=$((port + 1))
+  (./cl serve $port $t >/dev/null 2>&1 &) ; wait_for $port
+  [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:$port/cl.keys)" = 403 ] || fail "server must not serve cl.keys"
+  pkill -f "cl serve $port"
+  rm -rf $t
+else
+  echo "(this build has no fetch module, fetch tests skipped)"
+fi
+
 # 4. Error messages
 t=$(mktemp -d)
 printf '<cl>show hello</cl>' > $t/a.html
@@ -649,11 +739,12 @@ bad = 0
 d = tempfile.mkdtemp()
 for block in blocks:
     if block.lstrip().startswith("<cl>"): block = block.replace("<cl>", "").replace("</cl>", "")
+    block = re.sub(r'fetch "https?://[^/"]*', 'fetch "http://127.0.0.1:1', block)   # parse it, but never reach the network
     name = os.path.join(d, "b.html")
     open(name, "w").write("<cl>\n" + block + "\n</cl>\n")
     out = subprocess.run(["./cl", name], capture_output=True, text=True).stdout
     for m in re.findall(r"Common error: Line \d+: ([^<]*)", out):
-        if re.search(r"I do not know what|nothing is set to it|no database is open|cannot open the database|has no database support", m): continue
+        if re.search(r"I do not know what|nothing is set to it|no database is open|cannot open the database|has no database support|did not take the connection|has no fetch module", m): continue
         print(m); bad += 1
 sys.exit(1 if bad else 0)
 PY

@@ -339,6 +339,80 @@ parameters and escaping, automatic.
 
 ---
 
+## JSON and Other Sites
+
+Many services speak JSON: a content system like Drupal or WordPress, a shop, a
+weather or payment service. Two words read and write it, and `fetch` reads an
+address on the web.
+
+| Word | Form | Meaning |
+|---|---|---|
+| `read json` | `read json TEXT` | Turn JSON text into values: an object becomes a record, an array a list, `true` and `false` become `yes` and `no`, and `null` becomes empty text. Text from a visitor or another site stays marked as theirs, so it is made safe when shown. |
+| `json of` | `json of VALUE` | A list, record, text or number written as JSON text. `<`, `>` and `&` are written as `<`, `>` and `&`, so it is safe inside a `<script>` too. To answer with JSON, use `show raw json of VALUE`. |
+| `fetch` | `fetch "https://..."` | Read an address on the web. A reply that says it is JSON becomes records and lists; anything else is text. |
+| `fetch … with` | `fetch "https://..." with RECORD` | Send a record or a list as JSON (a POST) and read the reply. |
+
+```
+set posts to fetch "https://jsonplaceholder.typicode.com/posts"
+for each post in first 3 of posts
+  show "<li><a href=\"/post?id=[id of post]\">[title of post]</a></li>"
+end
+```
+
+Read a column with `COLUMN of RECORD`, the same as a database row, and go
+deeper one `of` at a time. A Drupal site with JSON:API switched on lists its
+articles at `/jsonapi/node/article`; each one is in `data of` the reply, with
+its title in `title of attributes of article`. A column whose name is not one
+word, like `field-image`, is read with `item "field-image" of RECORD`.
+
+Sending works the same way:
+
+```
+set note to record
+  title: "Hello"
+  body: "Sent from Common"
+end
+set reply to fetch "https://jsonplaceholder.typicode.com/posts" with note
+show "Saved as number [id of reply]"
+```
+
+The rules that keep it safe:
+
+- **The page chooses the site.** The address is written in quotes right
+  after `fetch`. A visitor's value may only go after the host, like
+  `fetch "https://api.example.com/posts/[query "id"]"`, and it is encoded
+  there, so `../admin` or `1&delete=yes` arrives as plain letters. A visitor's
+  value before the path, or a whole address from a visitor, is refused.
+- **Keys stay out of pages.** A service that wants a key gets it from
+  `cl.keys`, a file in the site's private folder (where `cl.secret` is), one
+  line per host: the host, then the header to send. The key is only ever sent
+  to that host, and the server never sends the file.
+
+  ```text
+  api.example.com  Authorization: Bearer abc123
+  ```
+
+- **Another site's text is treated like a visitor's.** It is escaped when
+  shown. HTML from a site you run yourself, like a Drupal article's body, can
+  be shown with `show raw body of article`; never do that for a site you do
+  not control.
+- **Limits:** 20 fetches each time a page runs, 10 seconds and 10 MB each. A
+  redirect is followed up to 3 times, but not when a key is sent. `fetch` is
+  not allowed inside `try`.
+
+A reply that is not a success is an error that says what it means, like
+`answered 404: there is nothing at that address`. Each fetch happens while the
+visitor waits, so a slow service makes a slow page.
+
+`fetch` needs libcurl when Common is built; `make` turns it on when it finds
+it, and `cl words` lists `fetch` when it is there. `read json` and `json of`
+are always there.
+
+JSON written in a page is text in quotes, so its quotes need a `\`, and its
+square brackets too, or they would be holes: `read json "\[1, 2, 3\]"`.
+
+---
+
 ## Comments
 
 | Symbol | Form | Meaning |
@@ -368,6 +442,9 @@ These are common guesses. Common rejects them and tells you the word to use.
 | `upper`, `lower`, `strip` | `uppercase of`, `lowercase of`, `trim of` |
 | `explode`, `.split()` | `split TEXT by ","` |
 | `$_POST`, `request.form` | `form "field"` |
+| `JSON.parse`, `json_decode` | `read json TEXT` |
+| `JSON.stringify`, `json_encode` | `json of VALUE` |
+| `curl`, `wget`, `request` | `fetch "https://..."` |
 | `"Hello " + name`, `"Hello " . name`, `"Hello $name"`, `"Hello {name}"` | `"Hello [name]"` |
 | `Show`, `SET` | lowercase: `show`, `set` |
 
@@ -382,10 +459,10 @@ These are the words of the language. The ones in bold cannot be variable names; 
 `include` `is` `least` `less` `list` `matches` `more` `most` `no` `not`
 `now` `of` `open` `or` `otherwise` `path` `query` `raw` `remember`
 `remembered` `repeat` `show` `set` `tell` `than` `the` `times` `to` `today` `try`
-`with` `yes` `between` `give` `record` `until` `send` `an`**
+`with` `yes` `between` `give` `record` `until` `send` `an` `fetch`**
 
 Usable as names too: `count` `date` `day` `email` `first` `hash` `item` `last`
-`lowercase` `month` `number` `paragraphs` `replace` `reverse` `sort` `split`
+`json` `lowercase` `month` `number` `paragraphs` `read` `replace` `reverse` `sort` `split`
 `trim` `uppercase` `year`
 
 Two forms are not shaped `word of x`: `split TEXT by SEP` and `replace A with B in TEXT`. They are kept that way because the English reads better, and both are rare in a first week.

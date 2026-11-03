@@ -8,3 +8,4 @@ against libraries installed on the build machine, which are not part of this
 product and keep their own licenses:
   - SQLite (public domain), when sqlite3.h is found
   - libpq, the PostgreSQL client library (PostgreSQL License), when pg_config is found
+  - libcurl (curl license, MIT/X style), when curl/curl.h is found

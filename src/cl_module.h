@@ -22,13 +22,14 @@
  *   - a module frees whatever it holds before it calls host->fail, because
  *     fail does not return (it is a longjmp to the line being run)
  *
- * The core stays small: it does not include sqlite3.h or libpq-fe.h, and it
- * builds and runs with no module at all (database words are then off).
+ * The core stays small: it does not include sqlite3.h, libpq-fe.h or
+ * curl/curl.h, and it builds and runs with no module at all (the database
+ * words and fetch are then off).
  */
 #ifndef CL_MODULE_H
 #define CL_MODULE_H
 
-#define CL_MODULE_API 1
+#define CL_MODULE_API 2
 
 /* ------------------------------------------------------------------ */
 /* Values: the one data type modules and the core share.                */
@@ -88,7 +89,8 @@ typedef struct CLHost {
 /* ------------------------------------------------------------------ */
 
 typedef enum {
-    CL_CAP_DATABASE = 1     /* a CLDatabase: what 'open database', 'ask database' and 'tell database' talk to */
+    CL_CAP_DATABASE = 1,    /* a CLDatabase: what 'open database', 'ask database' and 'tell database' talk to */
+    CL_CAP_FETCH    = 2     /* a CLFetch: what 'fetch' sends its requests through */
 } CLCapKind;
 
 /* A database driver. The core parses the three database words, checks the
@@ -115,9 +117,40 @@ typedef struct CLDatabase {
     void  (*tell)(const CLHost *h, void *handle, const char *sql, const Value *params);
 } CLDatabase;
 
+/* A way to fetch addresses on the web. The core parses 'fetch', checks that
+   no visitor chose the scheme or the host, counts the requests, adds the keys
+   from the site's private cl.keys file, turns a JSON reply into values and
+   marks every value as another site's. The module only sends the request. */
+typedef struct CLFetchRequest {
+    const char *url;               /* http:// or https://, checked by the core */
+    const char *host;              /* its host alone, for errors: "api.example.com" */
+    const char *body;              /* NULL for a GET; otherwise JSON text to POST */
+    const char *const *headers;    /* extra "Name: value" lines, from cl.keys */
+    int         nheaders;
+    long        seconds;           /* give up after this long, connecting included */
+    size_t      max_bytes;         /* fail rather than read a longer reply */
+} CLFetchRequest;
+
+/* What came back. The module allocates body (with a 0 after it) and
+   content_type; the core hands the reply back to free_reply when done. */
+typedef struct CLFetchReply {
+    long   status;                 /* 200, 404, ... */
+    char  *content_type;           /* "application/json; charset=utf-8", or NULL */
+    char  *body;
+    size_t len;
+} CLFetchReply;
+
+typedef struct CLFetch {
+    const char *name;              /* "libcurl" */
+    /* Send the request and fill the reply, or fail: no answer, too slow, too
+       big. Any HTTP status is a reply; the core decides what it means. */
+    void (*fetch)(const CLHost *h, const CLFetchRequest *req, CLFetchReply *reply);
+    void (*free_reply)(CLFetchReply *reply);
+} CLFetch;
+
 typedef struct CLCapability {
     CLCapKind   kind;
-    const void *table;      /* the CLDatabase for CL_CAP_DATABASE */
+    const void *table;      /* the CLDatabase for CL_CAP_DATABASE, the CLFetch for CL_CAP_FETCH */
 } CLCapability;
 
 /* What a module's entry point returns. Static storage: the core keeps the pointer. */
@@ -151,5 +184,6 @@ typedef const CLModule *(*cl_module_entry_fn)(const CLHost *host);
 /* The modules that can be compiled in. The core calls each one the Makefile linked. */
 const CLModule *cl_module_sqlite(const CLHost *host);
 const CLModule *cl_module_postgres(const CLHost *host);
+const CLModule *cl_module_curl(const CLHost *host);
 
 #endif /* CL_MODULE_H */
