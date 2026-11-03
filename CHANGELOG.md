@@ -4,6 +4,8 @@ Changes go under **Unreleased** as they are made. `make release VERSION=X.Y.Z` t
 
 ## Unreleased
 
+## 0.6.0 (2026-11-02)
+
 - New: `read json TEXT` turns JSON into lists and records, and `json of VALUE`
   writes any value as JSON (with `<`, `>` and `&` escaped, so it is safe in a
   `<script>`). JSON from a visitor stays marked as a visitor's. Both are in the
