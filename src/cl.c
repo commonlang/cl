@@ -356,6 +356,31 @@ static const char *nearest_word(const char *w, int cmd_only) {
     return best;
 }
 
+/* "length of x", "upper of x", "uppercse of x": a word before 'of' that is not
+   a column, because x is not a record. If it is a guess from another language
+   or a near miss of a Common word, say which word was meant. Leaves out "" when
+   it is neither. A guess can stand for two words (lower: less, lowercase of),
+   so the one that goes before 'of' is picked here. */
+static void of_word_hint(const char *w, char *out, size_t cap) {
+    out[0] = 0;
+    for (size_t i = 0; i < NSYN; i++) {
+        if (strcmp(SYNONYMS[i][0], w) != 0) continue;
+        const char *to = SYNONYMS[i][1]; size_t n = strlen(to);
+        if (n > 3 && strcmp(to + n - 3, " of") == 0) { snprintf(out, cap, ". '%s' is not a Common word: use '%s'", w, to); return; }
+        if (is_soft_word(to)) { snprintf(out, cap, ". '%s' is not a Common word: use '%s of'", w, to); return; }
+    }
+    size_t len = strlen(w);
+    const char *best = NULL; int bd = len <= 4 ? 2 : 3;        /* a short word must be one letter off, a longer one two */
+    for (size_t i = 0; i < NWORDS; i++) {
+        const Word *d = &DICTIONARY[i];
+        if (!d->form || !is_soft_word(d->word) || strncmp(d->form, d->word, strlen(d->word)) != 0) continue;
+        if (strncmp(d->form + strlen(d->word), " of ", 4) != 0) continue;
+        int dist = edit_distance(w, d->word);
+        if (dist > 0 && dist < bd) { bd = dist; best = d->word; }
+    }
+    if (best) snprintf(out, cap, ". Did you mean '%s of'?", best);
+}
+
 static void lowercase(const char *s, char *out, size_t n) {
     size_t i = 0;
     for (; s[i] && i + 1 < n; i++) out[i] = (char)tolower((unsigned char)s[i]);
@@ -494,12 +519,39 @@ static const char *type_name(VType t) {
     }
 }
 
+/* A number as a person writes it: 15 digits that count, and never 1e+18.
+   Very large and very small numbers are written out with zeros instead,
+   up to 20 places either way; past that the short form stays. */
+static void num_text(double n, char *out, size_t cap) {
+    snprintf(out, cap, "%.15g", n);
+    if (!strchr(out, 'e')) return;
+    char sci[40]; snprintf(sci, sizeof sci, "%.14e", n);       /* d.dddddddddddddde+XX */
+    const char *p = sci; int neg = *p == '-'; if (neg) p++;
+    const char *ep = strchr(p, 'e');
+    if (!ep || p[1] != '.' || ep - p != 16) return;
+    int x = atoi(ep + 1);
+    if (x > 20 || x < -20) return;
+    char digits[16]; digits[0] = p[0]; memcpy(digits + 1, p + 2, 14); digits[15] = 0;
+    char w[64]; size_t k = 0;
+    if (neg) w[k++] = '-';
+    if (x >= 0) {
+        for (int i = 0; i <= x; i++) w[k++] = i < 15 ? digits[i] : '0';
+    } else {
+        int nd = 15; while (nd > 1 && digits[nd - 1] == '0') nd--;
+        w[k++] = '0'; w[k++] = '.';
+        for (int i = 1; i < -x; i++) w[k++] = '0';
+        for (int i = 0; i < nd; i++) w[k++] = digits[i];
+    }
+    w[k] = 0;
+    snprintf(out, cap, "%s", w);
+}
+
 /* Text form of any value. Caller frees. */
 static char *v_to_text(const Value *v) {
     char tmp[64];
     switch (v->t) {
         case V_TEXT: return xstrdup(v->s);
-        case V_NUM:  snprintf(tmp, sizeof tmp, "%.15g", v->n); return xstrdup(tmp);
+        case V_NUM:  num_text(v->n, tmp, sizeof tmp); return xstrdup(tmp);
         case V_BOOL: return xstrdup(v->n ? "yes" : "no");
         default: {
             Buf *b = buf_new();
@@ -1608,7 +1660,7 @@ static void json_write(Buf *b, const Value *v) {
     switch (v->t) {
         case V_NUM:
             if (v->n != v->n || v->n - v->n != 0) buf_puts(b, "null");      /* JSON has no infinity */
-            else { char n[64]; snprintf(n, sizeof n, "%.15g", v->n); buf_puts(b, n); }
+            else { char n[64]; num_text(v->n, n, sizeof n); buf_puts(b, n); }
             break;
         case V_BOOL: buf_puts(b, v->n ? "true" : "false"); break;
         case V_TEXT: t = plain_text(v); json_quote(b, t); free(t); break;
@@ -2183,8 +2235,9 @@ static Value parse_primary_inner(Env *e, Toks *T) {
         Value r = parse_primary(e, T);
         if (r.t != V_RECORD) {
             held_push(r);
-            if (r.t == V_LIST) fail("'%s of' needs one record, but this is a list of %d. Use 'first of' or 'for each' to pick one", field, r.count);
-            fail("'%s of' needs a record from the database, not %s", field, type_name(r.t));
+            char hint[160]; of_word_hint(field, hint, sizeof hint);
+            if (r.t == V_LIST) fail("'%s of' needs one record, but this is a list of %d. Use 'first of' or 'for each' to pick one%s", field, r.count, hint);
+            fail("'%s of' needs a record from the database, not %s%s", field, type_name(r.t), hint);
         }
         return record_field(&r, field);
     }

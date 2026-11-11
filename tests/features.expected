@@ -157,3 +157,10 @@ a literal [bracket] and a h with quotes
 2
 <pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 297: 'curl' is not a Common word. Use 'fetch'</pre>
 <pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 298: 'fetch' needs an address in quotes: fetch &quot;https://api.example.com/posts&quot;</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 299: 'length of' needs a record from the database, not text. 'length' is not a Common word: use 'count of'</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 300: 'lower of' needs a record from the database, not text. 'lower' is not a Common word: use 'lowercase of'</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 301: 'uppercse of' needs a record from the database, not text. Did you mean 'uppercase of'?</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 303: 'size of' needs one record, but this is a list of 2. Use 'first of' or 'for each' to pick one. 'size' is not a Common word: use 'count of'</pre>
+<pre class="cl-error" style="color:#c62828;white-space:pre-wrap">Common error: Line 304: 'title of' needs a record from the database, not text</pre>
+1000000000000000000 -1000000000000000000 0.00001 0.000000333333333333333
+{"n":1000000000000000000}
