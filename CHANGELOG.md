@@ -4,6 +4,16 @@ Changes go under **Unreleased** as they are made. `make release VERSION=X.Y.Z` t
 
 ## Unreleased
 
+- Fixed: a wrong word before `of` now gets pointed to the right one. `length of
+  name`, `upper of name` and a misspelling like `uppercse of name` used to say
+  only that `of` "needs a record from the database". The error now adds
+  "'length' is not a Common word: use 'count of'" or "Did you mean 'uppercase
+  of'?". `lower of` points to `lowercase of`, and `is lower than` still points
+  to `less`.
+- Fixed: large and small numbers are written out in full instead of as
+  `1e+18` or `1e-05`, on the page and in `json of`. A number still keeps 15
+  digits that count; past 20 zeros the short form stays.
+
 ## 0.6.0 (2026-11-02)
 
 - New: `read json TEXT` turns JSON into lists and records, and `json of VALUE`
